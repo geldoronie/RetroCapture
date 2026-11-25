@@ -90,12 +90,65 @@ public:
      */
     void setMethodHint(Method m);
     RifeBackend &rife() { return m_rife; }
+    /**
+     * RIFE: schedule phases 1/n .. (n-1)/n of the current pair up front, so
+     * the worker starts on all of them as soon as B is uploaded (#256: the
+     * capture-rate fill mode changes n from pair to pair, which the
+     * backend's own "same phases as last pair" prefetch never catches).
+     */
+    void requestPhases(int n);
     const RifeBackend &rife() const { return m_rife; }
     /** The last render() output came from RIFE (not the Motion fallback). */
     bool lastWasRife() const { return m_lastRife; }
 
     /** Store a new real frame (copied; srcTex may be reused afterwards). */
     bool pushFrame(GLuint srcTex, uint32_t w, uint32_t h);
+
+    /**
+     * Repeat detection (#256): how srcTex differs from the latest real frame
+     * (B). A block-wise luma difference on a small grid is read back; the
+     * noise floor is the median block difference, so an analog capture's
+     * noise does not count as change. Synchronous (one small readback).
+     */
+    struct Difference
+    {
+        bool valid = false;     // false = no history / different size
+        float noise = 0.0f;     // median block mean |dLuma| (0..1)
+        float peak = 0.0f;      // largest block mean |dLuma|
+        int changedBlocks = 0;  // blocks clearly above the noise floor
+        int changedAvg = 0;     // blocks whose average luma moved (> 2 steps)
+        int cutBlocks = 0;      // blocks whose average luma moved a lot (>= 24 steps)
+        /** Scene cut: most of the picture changed at once (a new scene, a
+         *  flash, a menu over gameplay). Interpolating across it would only
+         *  produce a cross-fade "morph" frame. */
+        bool sceneCut() const { return valid && blocks > 0 && cutBlocks * 2 > blocks; }
+        float peakAvg = 0.0f;   // largest block-average change
+        int blocks = 0;
+        /**
+         * The game did not draw a new picture. noiseFloor = the source's
+         * usual frame-to-frame noise (tracked by the caller).
+         *  - Clean (digital) source: pixel-level test; a uniform change
+         *    (fade) lifts the median above the floor and is not a repeat.
+         *  - Noisy (analog through a converter) source: noise, field
+         *    shimmer of a deinterlaced 480i signal and scaler ringing touch
+         *    hundreds of blocks on every capture, so the test is on block
+         *    averages instead: a new picture moves some block's average
+         *    luma by > kAvgPeak steps, a repeat stays far below it
+         *    (measured on a Dreamcast through SCART->HDMI: repeats <= 17,
+         *    new pictures >= 29).
+         */
+        static constexpr float kNoisySource = 0.5f / 255.0f;
+        static constexpr float kAvgPeak = 22.0f / 255.0f;
+        bool repeat(float noiseFloor) const
+        {
+            if (!valid) return false;
+            if (noiseFloor >= kNoisySource)
+                return peakAvg < kAvgPeak;
+            return changedBlocks < 2 && peak - noise < 24.0f / 255.0f &&
+                   noise <= noiseFloor + 2.0f / 255.0f;
+        }
+    };
+    Difference compareWithLatest(GLuint srcTex, uint32_t w, uint32_t h);
 
     /** Real frames held: 0, 1 or 2. */
     int frameCount() const { return m_count; }
@@ -166,6 +219,7 @@ private:
     GLuint m_progSearch = 0;
     GLuint m_progConsensus = 0;
     GLuint m_progWarp = 0;
+    GLuint m_progDiff = 0;
     GLuint m_vao = 0, m_vbo = 0, m_ebo = 0;
     bool m_programsTried = false;
     bool m_programsOk = false;
@@ -185,6 +239,8 @@ private:
     Target m_out;
     std::vector<Target> m_flow; // per level
     Target m_flowFinal;         // consensus output (finest level)
+    Target m_diff;              // repeat detection grid (#256)
+    std::vector<uint8_t> m_diffPixels;
     bool m_flowValid = false;
 
     RifeBackend m_rife;

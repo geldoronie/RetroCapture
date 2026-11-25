@@ -107,8 +107,16 @@ FrameGenClock::Emit FrameGenClock::poll(int64_t nowUs, int factor)
         return Emit();
 
     if (m_pairSlots < 0)
-        m_pairSlots = factor >= 2 ? factor : 0;
+        m_pairSlots = factor >= 1 ? factor : 0;
 
+    if (m_pendingReal && factor == 1 && m_hasPair)
+    {
+        // Pass-through (1 slot per pair, #256): the new real frame is due
+        // right away, so the owed previous one would only keep the output a
+        // frame behind for good. Show the newer one.
+        m_pendingReal = false;
+        ++m_dropped;
+    }
     if (m_pendingReal)
     {
         m_pendingReal = false;
@@ -129,7 +137,7 @@ FrameGenClock::Emit FrameGenClock::poll(int64_t nowUs, int factor)
     }
 
     const int64_t span = m_tsB - m_tsA;
-    if (factor >= 2)
+    if (factor >= 1)
     {
         if (m_pairSlots != factor)
         {

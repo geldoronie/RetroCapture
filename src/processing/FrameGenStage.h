@@ -3,6 +3,9 @@
 #include "FrameGenClock.h"
 #include "FrameInterpolator.h"
 #include <cstdint>
+#include <cstdio>
+#include <deque>
+#include <vector>
 
 /**
  * Frame generation stage (#247): the output clock (FrameGenClock) driving
@@ -33,12 +36,27 @@ public:
         bool fresh = false;      // emitted by THIS update() call
     };
 
+    /** factor value for the capture-rate fill mode (#256). */
+    static constexpr int kFactorFill = -1;
+
     /**
-     * factor: 2..4 = fixed multiple, 0 = per refresh (display).
+     * factor: 2..4 = fixed multiple, 0 = per refresh (display), kFactorFill
+     * = match the capture rate. skipRepeats: captures that repeat the latest
+     * distinct picture are not source frames (#256).
      * Returns the current output frame (invalid until the first one).
      */
     Frame update(GLuint srcTex, uint32_t w, uint32_t h, uint64_t srcSeq, int64_t srcTsUs, int64_t nowUs,
-                 int factor, const FrameInterpolator::Options &opt);
+                 int factor, bool skipRepeats, const FrameInterpolator::Options &opt);
+
+    /** Slots per source frame the last update() scheduled (fill: per pair). */
+    int effectiveFactor() const { return m_effFactor; }
+    /** Capture interval (every captured frame, repeats included); 0 = unknown. */
+    int64_t capturePeriodUs() const { return m_capPeriodUs; }
+    /** Learnt game cadence (low percentile of recent spans between new
+     *  pictures); 0 until known or with repeat skipping off. */
+    int64_t cadenceUs() const { return m_cadenceUs; }
+    /** Captures skipped as repeats so far (monotonic). */
+    uint64_t repeatsSkipped() const { return m_repeats; }
 
     /** Generation switched off: forget the history (counters persist). */
     void deactivate();
@@ -47,7 +65,14 @@ public:
     FrameInterpolator &interpolator() { return m_interp; }
     const FrameGenClock &clock() const { return m_clock; }
 
-    void destroy() { m_interp.destroy(); }
+    void destroy()
+    {
+        m_interp.destroy();
+        if (m_csv) std::fclose(m_csv);
+        m_csv = nullptr;
+    }
+    /** Scene cuts found so far (monotonic): pairs not interpolated. */
+    uint64_t sceneCuts() const { return m_sceneCuts; }
 
 private:
     // Timing stats, logged every few seconds (#247 acceptance numbers):
@@ -72,4 +97,39 @@ private:
     Frame m_current;
     uint64_t m_lastSrcSeq = 0;
     bool m_active = false;
+
+    // #256 — capture cadence and repeat detection.
+    bool acceptAsSourceFrame(GLuint srcTex, uint32_t w, uint32_t h, int64_t srcTsUs, bool skipRepeats);
+    int64_t m_capPeriodUs = 0;
+    int64_t m_lastCapTsUs = 0;
+    int64_t m_lastDistinctTsUs = 0;
+    float m_noiseFloor = 0.0f;
+    bool m_noiseValid = false;
+    uint64_t m_repeats = 0;
+    // Game cadence (#256): recent spans between new pictures, their low
+    // percentile, and the repeats let through by the hold limit.
+    void noteDistinctSpan(int64_t srcTsUs);
+    std::deque<int64_t> m_spans;
+    int64_t m_cadenceUs = 0;
+    bool m_lastWasHeld = false;
+    uint64_t m_heldThrough = 0;
+    int m_effFactor = 0;
+    // Repeat-detection diagnostics (logged with the timing stats).
+    struct DiffStats
+    {
+        int n = 0, repeats = 0;
+        std::vector<int> changed, changedAvg;
+        std::vector<float> peakAvg;
+        std::vector<float> noise, peak;
+    };
+    DiffStats m_diffStats;
+    static bool debugEnabled();
+    void noteDebug(const FrameInterpolator::Difference &diff, int64_t srcTsUs);
+    const bool m_debug = debugEnabled();
+    FILE *m_csv = nullptr;
+    int m_csvRows = 0;
+    bool m_csvTried = false;
+    bool m_lastWasCut = false;
+    uint64_t m_sceneCuts = 0;
+    int m_diffBlocks = 0;
 };

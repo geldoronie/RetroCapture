@@ -2967,6 +2967,8 @@ void UIManager::loadConfig()
             }
             if (fg.contains("protectStatic") && fg["protectStatic"].is_boolean())
                 g.protectStatic = fg["protectStatic"].get<bool>();
+            if (fg.contains("skipRepeats") && fg["skipRepeats"].is_boolean())
+                g.skipRepeats = fg["skipRepeats"].get<bool>();
             if (fg.contains("outputs") && fg["outputs"].is_object())
             {
                 auto &o = fg["outputs"];
@@ -3524,6 +3526,7 @@ void UIManager::saveConfig()
                 {"mode", FrameGenSettings::modeName(g.mode)},
                 {"method", FrameGenSettings::methodName(g.method)},
                 {"protectStatic", g.protectStatic},
+                {"skipRepeats", g.skipRepeats},
                 {"outputs", {
                     {"window", g.window},
                     {"stream", g.stream},

@@ -1,6 +1,7 @@
 #include "FrameInterpolator.h"
 #include "../utils/Logger.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <string>
@@ -37,6 +38,17 @@ namespace
 {
 // Finest flow level is at most this wide (1080p -> 480, 720p -> 640).
 constexpr uint32_t kMaxFlowWidth = 640;
+// Repeat detection grid (#256) and its "changed block" thresholds (8-bit
+// luma steps above the frame's noise floor: block mean / single texel).
+constexpr uint32_t kDiffMaxW = 128;
+constexpr uint32_t kDiffMaxH = 72;
+constexpr int kDiffMeanStep = 3;
+constexpr int kDiffMaxStep = 24;
+// Block-average channel: 8 units per luma step, so 16 = 2 luma steps.
+constexpr int kDiffAvgStep = 16;
+// Scene-cut block: average luma moved >= 24 steps (x8 scale; the channel
+// saturates at ~31.9 steps).
+constexpr int kDiffCutStep = 24 * 8;
 constexpr int kMaxLevels = 5;
 constexpr uint32_t kMinLevelDim = 16;
 // Matching parameters (luma in 0..1, SAD = mean absolute difference).
@@ -164,6 +176,43 @@ uniform vec2 uSrcSize;
 void main() {
     vec2 q = floor(gl_FragCoord.xy) * 2.0 + 1.0;
     FragColor = vec4(texture(uSrc, q / uSrcSize).r, 0.0, 0.0, 1.0);
+}
+)";
+
+// Repeat detection (#256): one texel per block of the source.
+//  R = mean |dLuma| over a 4x4 grid of exact texels (pixel-level change);
+//  G = max of those;
+//  B = |mean luma A - mean luma B| over the whole block (8x8 bilinear taps,
+//      ~16x16 texels): blind to sub-pixel shifts (the field shimmer of a
+//      bob-deinterlaced 480i source, scaler ringing), not to real motion.
+const char *kDiffFS = R"(
+uniform sampler2D uA;
+uniform sampler2D uB;
+uniform vec2 uBlock;
+uniform vec2 uSize;
+const vec3 W = vec3(0.299, 0.587, 0.114);
+void main() {
+    ivec2 sz = textureSize(uA, 0);
+    vec2 base = floor(gl_FragCoord.xy) * uBlock;
+    float acc = 0.0;
+    float mx = 0.0;
+    for (int j = 0; j < 4; ++j)
+        for (int i = 0; i < 4; ++i) {
+            vec2 q = base + (vec2(float(i), float(j)) + 0.5) * uBlock * 0.25;
+            ivec2 t = clamp(ivec2(q), ivec2(0), sz - 1);
+            float d = abs(dot(texelFetch(uA, t, 0).rgb - texelFetch(uB, t, 0).rgb, W));
+            acc += d;
+            mx = max(mx, d);
+        }
+    float ma = 0.0;
+    float mb = 0.0;
+    for (int j = 0; j < 8; ++j)
+        for (int i = 0; i < 8; ++i) {
+            vec2 q = (base + (vec2(float(i), float(j)) + 0.5) * uBlock * 0.125) / uSize;
+            ma += dot(texture(uA, q).rgb, W);
+            mb += dot(texture(uB, q).rgb, W);
+        }
+    FragColor = vec4(acc / 16.0, mx, abs(ma - mb) / 64.0 * 8.0, 1.0);
 }
 )";
 
@@ -415,8 +464,9 @@ bool FrameInterpolator::ensurePrograms()
     m_progSearch = buildProgram(match + kSearchFS, "search");
     m_progConsensus = buildProgram(match + kConsensusFS, "consensus");
     m_progWarp = buildProgram(kWarpFS, "warp");
+    m_progDiff = buildProgram(kDiffFS, "diff");
     if (!m_progCopy || !m_progLuma || !m_progDown || !m_progSearch || !m_progConsensus ||
-        !m_progWarp)
+        !m_progWarp || !m_progDiff)
     {
         m_failReason = "shader compilation failed";
         destroy();
@@ -502,6 +552,7 @@ void FrameInterpolator::releaseTargets()
     for (Target &t : m_flow) freeTarget(t);
     m_flow.clear();
     freeTarget(m_flowFinal);
+    freeTarget(m_diff);
     freeTarget(m_out);
     m_levels.clear();
     m_w = m_h = 0;
@@ -535,6 +586,12 @@ bool FrameInterpolator::ensureTargets(uint32_t w, uint32_t h)
         s.luma.resize(m_levels.size());
         for (size_t i = 0; ok && i < m_levels.size(); ++i)
             ok = makeTarget(s.luma[i], m_levels[i].w, m_levels[i].h, GL_R8, GL_RED, GL_UNSIGNED_BYTE, true);
+    }
+    {
+        // Repeat-detection grid: blocks of >= 8 source px, at most 128x72.
+        const uint32_t dw = std::max<uint32_t>(1, std::min<uint32_t>(kDiffMaxW, w / 8));
+        const uint32_t dh = std::max<uint32_t>(1, std::min<uint32_t>(kDiffMaxH, h / 8));
+        ok = ok && makeTarget(m_diff, dw, dh, GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, false);
     }
     if (ok && m_motionOk)
     {
@@ -644,6 +701,71 @@ bool FrameInterpolator::pushFrame(GLuint srcTex, uint32_t w, uint32_t h)
     return true;
 }
 
+FrameInterpolator::Difference FrameInterpolator::compareWithLatest(GLuint srcTex, uint32_t w, uint32_t h)
+{
+    Difference d;
+    const GLuint b = latestTexture();
+    if (!srcTex || !b || w != m_w || h != m_h || !m_diff.fbo || !m_programsOk) return d;
+    GLStateGuard guard;
+    glDisable(GL_BLEND);
+    glUseProgram(m_progDiff);
+    bindTex(0, srcTex, true);
+    bindTex(1, b, true);
+    setI(m_progDiff, "uA", 0);
+    set2F(m_progDiff, "uSize", static_cast<float>(w), static_cast<float>(h));
+    setI(m_progDiff, "uB", 1);
+    set2F(m_progDiff, "uBlock", static_cast<float>(w) / static_cast<float>(m_diff.w),
+          static_cast<float>(h) / static_cast<float>(m_diff.h));
+    drawTo(m_diff);
+    // The source texture is shared with the rest of the pipeline: give it
+    // back its own filter (B is one of ours).
+    bindTex(0, srcTex, m_filterLinear);
+    restoreFilters();
+
+    const size_t n = static_cast<size_t>(m_diff.w) * m_diff.h;
+    m_diffPixels.resize(n * 4);
+    // RGBA8 rows are 4-byte aligned: the default pack alignment fits.
+    glReadPixels(0, 0, static_cast<GLsizei>(m_diff.w), static_cast<GLsizei>(m_diff.h), GL_RGBA,
+                 GL_UNSIGNED_BYTE, m_diffPixels.data());
+
+    // Noise floor = median block mean; a block "changed" when its mean is
+    // clearly above it, or a single texel in it jumped (a small sprite).
+    // The block-average channel (x8 scale, 1/8 luma step) counts its own
+    // changed blocks: that one ignores sub-pixel shimmer.
+    std::vector<uint8_t> means(n), avg(n);
+    for (size_t i = 0; i < n; ++i)
+    {
+        means[i] = m_diffPixels[i * 4];
+        avg[i] = m_diffPixels[i * 4 + 2];
+    }
+    std::vector<uint8_t> sorted = means;
+    std::nth_element(sorted.begin(), sorted.begin() + n / 2, sorted.end());
+    const int noise = sorted[n / 2];
+    sorted = avg;
+    std::nth_element(sorted.begin(), sorted.begin() + n / 2, sorted.end());
+    const int avgNoise = sorted[n / 2];
+    int peak = 0, changed = 0, changedAvg = 0, peakAvg = 0, cutBlocks = 0;
+    for (size_t i = 0; i < n; ++i)
+    {
+        const int m = means[i];
+        const int mx = m_diffPixels[i * 4 + 1];
+        if (m > peak) peak = m;
+        if (m > noise + kDiffMeanStep || mx > 2 * noise + kDiffMaxStep) ++changed;
+        if (avg[i] > peakAvg) peakAvg = avg[i];
+        if (avg[i] > avgNoise + kDiffAvgStep) ++changedAvg;
+        if (avg[i] >= kDiffCutStep) ++cutBlocks;
+    }
+    d.changedAvg = changedAvg;
+    d.cutBlocks = cutBlocks;
+    d.peakAvg = peakAvg / 8.0f / 255.0f;
+    d.valid = true;
+    d.noise = noise / 255.0f;
+    d.peak = peak / 255.0f;
+    d.changedBlocks = changed;
+    d.blocks = static_cast<int>(n);
+    return d;
+}
+
 void FrameInterpolator::computeFlow()
 {
     const Slot &A = m_slots[1 - m_latest];
@@ -698,6 +820,13 @@ void FrameInterpolator::computeFlow()
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
     m_flowValid = true;
+}
+
+void FrameInterpolator::requestPhases(int n)
+{
+    if (!m_rifeWanted || n < 2 || m_count < 2 || m_rife.state() != RifeBackend::State::Ready) return;
+    for (int j = 1; j < n; ++j)
+        m_rife.request(static_cast<float>(j) / static_cast<float>(n));
 }
 
 void FrameInterpolator::setMethodHint(Method m)
@@ -810,7 +939,8 @@ void FrameInterpolator::destroy()
 {
     m_rife.shutdown();
     releaseTargets();
-    GLuint *progs[] = {&m_progCopy, &m_progLuma, &m_progDown, &m_progSearch, &m_progConsensus, &m_progWarp};
+    GLuint *progs[] = {&m_progCopy, &m_progLuma, &m_progDown, &m_progSearch, &m_progConsensus, &m_progWarp,
+                       &m_progDiff};
     for (GLuint *p : progs)
     {
         if (*p) glDeleteProgram(*p);

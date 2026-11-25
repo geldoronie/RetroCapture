@@ -372,7 +372,12 @@ public:
         bool active = false;          // generating right now
         int effectiveMode = 0;        // FrameGenSettings::Mode in effect
         bool remoteDriven = false;    // driven by the remote "motion" interpolation
-        float sourceFps = 0.0f;       // measured source rate
+        float sourceFps = 0.0f;       // measured source rate (distinct frames, #256)
+        float captureFps = 0.0f;      // capture rate, repeats included (#256)
+        uint64_t repeatsSkipped = 0;  // captures skipped as repeats (#256)
+        uint64_t sceneCuts = 0;       // pairs not interpolated: scene cuts (#256)
+        uint32_t sourceWidth = 0;     // size frame generation runs at
+        uint32_t sourceHeight = 0;
         float outputFps = 0.0f;       // output timeline rate (source x factor)
         float addedLatencyMs = 0.0f;  // look-ahead latency it adds
         // #248 — RIFE backend (RifeBackend::State: 0 idle, 1 loading,

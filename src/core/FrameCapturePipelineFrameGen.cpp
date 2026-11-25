@@ -26,6 +26,7 @@
 #include "../output/VirtualCameraOutputMac.h"
 #endif
 
+#include <algorithm>
 #include <cmath>
 #include <string>
 
@@ -159,22 +160,41 @@ FrameCapturePipeline::FrameGenPlan FrameCapturePipeline::planFrameGeneration(GLu
                  : fg.method == FrameGenSettings::RIFE ? FrameInterpolator::Method::RIFE
                                                        : FrameInterpolator::Method::Motion;
     opt.protectStatic = fg.protectStatic;
-    const int factor = display ? 0 : fg.factor();
-    const FrameGenStage::Frame frame =
-        m_frameGen->update(srcTex, w, h, live.seq, live.tsUs, MediaClock::nowUs(), factor, opt);
+    const bool fill = fg.mode == FrameGenSettings::Fill;
+    const int factorIn = display ? 0 : fill ? FrameGenStage::kFactorFill : fg.factor();
+    const FrameGenStage::Frame frame = m_frameGen->update(srcTex, w, h, live.seq, live.tsUs, MediaClock::nowUs(),
+                                                          factorIn, fg.skipRepeats, opt);
+    const int factor = display ? 0 : m_frameGen->effectiveFactor();
 
-    const int64_t period = m_frameGen->clock().periodUs();
+    // Source rate = distinct frames (the game's own rate with skipRepeats).
+    // Source rate: the learnt game cadence when repeats are skipped (the
+    // clock's running average also counts pauses and held-through repeats,
+    // so it reads low while the picture is still), else the clock's period.
+    const int64_t cadence = fg.skipRepeats ? m_frameGen->cadenceUs() : 0;
+    const int64_t period = cadence > 0 ? cadence : m_frameGen->clock().periodUs();
+    const int64_t capPeriod = m_frameGen->capturePeriodUs();
     const double srcFps = period > 0 ? 1e6 / static_cast<double>(period) : 0.0;
+    const double capFps = capPeriod > 0 ? 1e6 / static_cast<double>(capPeriod) : 0.0;
     st.active = true;
     st.sourceFps = static_cast<float>(srcFps);
-    st.outputFps = display ? 0.0f : static_cast<float>(srcFps * factor);
+    st.captureFps = static_cast<float>(capFps);
+    st.repeatsSkipped = m_frameGen->repeatsSkipped();
+    st.sceneCuts = m_frameGen->sceneCuts();
+    st.sourceWidth = w;
+    st.sourceHeight = h;
+    if (display)
+        st.outputFps = 0.0f;
+    else if (fill)
+        st.outputFps = static_cast<float>(capFps > 0.0 ? std::max(capFps, srcFps) : srcFps);
+    else
+        st.outputFps = static_cast<float>(srcFps * factor);
     st.addedLatencyMs = static_cast<float>(
         display ? period / 1000.0 : (period * (factor - 1)) / (1000.0 * (factor > 0 ? factor : 1)));
     st.addedLatencyMs += static_cast<float>(m_frameGen->clock().extraDelayUs() / 1000.0);
     fillRifeStatus(st, fi, fg.method == FrameGenSettings::RIFE);
     ui->setFrameGenStatus(st);
 
-    const int logKey = 1 + fg.mode * 8 + fg.method * 2 + (st.remoteDriven ? 1 : 0);
+    const int logKey = 1 + fg.mode * 16 + fg.method * 4 + (fg.skipRepeats ? 2 : 0) + (st.remoteDriven ? 1 : 0);
     if (logKey != m_frameGenLoggedMode)
     {
         m_frameGenLoggedMode = logKey;
@@ -187,7 +207,8 @@ FrameCapturePipeline::FrameGenPlan FrameCapturePipeline::planFrameGeneration(GLu
                  (opt.method == FrameInterpolator::Method::RIFE ? "rife"
                   : opt.method == FrameInterpolator::Method::Motion && fi.motionSupported() ? "motion"
                                                                                            : "blend") +
-                 (st.remoteDriven ? " (remote interpolation)" : "") + ", outputs:" + (outs.empty() ? " none" : outs));
+                 (st.remoteDriven ? " (remote interpolation)" : "") +
+                 (fg.skipRepeats ? ", skipping repeated frames" : "") + ", outputs:" + (outs.empty() ? " none" : outs));
     }
 
     // Display mode follows the window refresh: vsync on while focused
@@ -217,9 +238,15 @@ FrameCapturePipeline::FrameGenPlan FrameCapturePipeline::planFrameGeneration(GLu
     auto accept = [&](double outFps) {
         if (!frame.generated)
             return true;
+        // Fill (#256): the timeline runs at the capture rate; an encoder at
+        // (or above) that rate takes every slot, whatever the game's rate.
+        if (fill && capFps > 0.0 && outFps >= capFps * 0.95)
+            return true;
         if (frame.slots <= 0 || srcFps <= 0.0)
             return false;
-        int m = static_cast<int>(std::floor(outFps * 1.05 / srcFps));
+        // Rounding tolerance: the measured source rate wanders (a 30 fps game
+        // reads 30-32), and 60 / 31.5 must still carry 2 phases.
+        int m = static_cast<int>(std::floor(outFps / srcFps + 0.15));
         if (m < 1) m = 1;
         if (m > frame.slots) m = frame.slots;
         return (frame.slot * m) % frame.slots == 0;

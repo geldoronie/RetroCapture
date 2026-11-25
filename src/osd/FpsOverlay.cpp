@@ -64,6 +64,7 @@ void FpsOverlay::tick()
         m_winRawStart    = c.rawEncoded;
         m_winRecordStart = c.recordEncoded;
         m_winGenRealStart = c.genReal;
+        m_winGenRepeatsStart = c.genRepeats;
         m_winGenStart     = c.genGenerated;
         m_winGenDropStart = c.genDropped;
         return;
@@ -135,6 +136,7 @@ void FpsOverlay::tick()
         m_winRawStart    = c.rawEncoded;
         m_winRecordStart = c.recordEncoded;
         m_winGenRealStart = c.genReal;
+        m_winGenRepeatsStart = c.genRepeats;
         m_winGenStart     = c.genGenerated;
         m_winGenDropStart = c.genDropped;
     }
@@ -175,6 +177,8 @@ void FpsOverlay::publishWindow(double windowSec)
     s.genFps       = static_cast<float>(counterDelta(c.genGenerated, m_winGenStart) / windowSec);
     s.genDropped   = static_cast<uint32_t>(counterDelta(c.genDropped, m_winGenDropStart));
     s.genTargetFps = c.genTargetFps;
+    s.genSourceFps = c.genSourceFps;
+    s.genRepeatFps = static_cast<float>(counterDelta(c.genRepeats, m_winGenRepeatsStart) / windowSec);
 
     m_display = s;
     std::lock_guard<std::mutex> lock(m_statsMutex);
@@ -357,6 +361,15 @@ void FpsOverlay::renderFull()
         {
             ImGui::SameLine();
             ImGui::TextColored(kColBad, "drop %u", s.genDropped);
+        }
+        // #256 — the game's own rate when it draws below the capture rate.
+        if (s.genRepeatFps > 0.5f)
+        {
+            ImGui::TextColored(kColLabel, "Game");
+            ImGui::SameLine(col);
+            ImGui::Text("%6.2f", s.genSourceFps);
+            ImGui::SameLine();
+            ImGui::TextColored(kColLabel, "fps (%.0f repeats/s skipped)", s.genRepeatFps);
         }
     }
 
