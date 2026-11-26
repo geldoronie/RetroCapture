@@ -24,6 +24,7 @@
 #include "../output/WindowManager.h"
 #endif
 #include "../shader/ShaderEngine.h"
+#include "../processing/UpscalerStage.h"
 #include "../ui/UIManager.h"
 #include "../osd/QuickActionsOverlay.h"
 #include "../osd/OSDChat.h"
@@ -88,6 +89,7 @@
 #include <iomanip>
 #include <thread>
 #include <chrono>
+#include "../utils/LoopProfiler.h"
 
 // swscale removed - resize is now done in encoding (HTTPTSStreamer)
 
@@ -373,6 +375,9 @@ bool Application::initRenderer()
     m_pboManager = std::make_unique<PBOManager>();
     LOG_INFO("PBOManager created");
 
+    // #251 — built-in upscaler stage; its shader engine is created on first use.
+    m_upscaler = std::make_unique<UpscalerStage>();
+
     // Initialize ShaderEngine
     LOG_INFO("Creating ShaderEngine...");
     m_shaderEngine = std::make_unique<ShaderEngine>();
@@ -462,9 +467,8 @@ bool Application::initCapture()
     {
         LOG_INFO("Source is remote — creating VideoCaptureRemote");
         auto remote = std::make_unique<VideoCaptureRemote>();
-        VideoCaptureRemote::InterpolationMode imode = VideoCaptureRemote::InterpolationMode::Linear;
-        if (m_remoteInterpolation == "nearest") imode = VideoCaptureRemote::InterpolationMode::Nearest;
-        else if (m_remoteInterpolation == "off") imode = VideoCaptureRemote::InterpolationMode::Off;
+        const VideoCaptureRemote::InterpolationMode imode =
+            VideoCaptureRemote::interpolationModeFromName(m_remoteInterpolation);
         remote->setInterpolationMode(imode);
         remote->setAudioVolume(m_remoteAudioGain);
         m_capture = std::move(remote);
@@ -982,6 +986,19 @@ void Application::handleKeyInput()
         {
             f8Pressed = false;
         }
+
+        // F9 toggles the FPS counter overlay (#226).
+        static bool f9Pressed = false;
+        bool f9Now = sdlWindow->isKeyPressed(SDLK_F9);
+        if (f9Now && !f9Pressed)
+        {
+            m_ui->setFpsOverlayEnabled(!m_ui->getFpsOverlayEnabled());
+            f9Pressed = true;
+        }
+        else if (!f9Now)
+        {
+            f9Pressed = false;
+        }
     }
 #else
     GLFWwindow *window = static_cast<GLFWwindow *>(m_window->getWindow());
@@ -1040,6 +1057,21 @@ void Application::handleKeyInput()
     else
     {
         f8Pressed = false;
+    }
+
+    // F9 toggles the FPS counter overlay (#226).
+    static bool f9Pressed = false;
+    if (glfwGetKey(window, GLFW_KEY_F9) == GLFW_PRESS)
+    {
+        if (!f9Pressed)
+        {
+            m_ui->setFpsOverlayEnabled(!m_ui->getFpsOverlayEnabled());
+            f9Pressed = true;
+        }
+    }
+    else
+    {
+        f9Pressed = false;
     }
 #endif // USE_SDL2
 }
@@ -1754,6 +1786,17 @@ void Application::run()
 
     while (!m_window->shouldClose() && !s_quitRequested.load())
     {
+        // Per-iteration stage timing, logged every 10 s (LoopProfiler).
+        struct IterationTimer
+        {
+            std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
+            ~IterationTimer()
+            {
+                LoopProfiler::get().endIteration(
+                    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+            }
+        } iterationTimer;
+
         // Check if window is still valid before polling events
         // This prevents crashes when window is invalidated (e.g., KVM switch)
         if (!m_window)
@@ -1918,6 +1961,21 @@ void Application::run()
             dummyLogShown = true;
         }
 
+        // #228 — source colour controls live in UIManager (Image window,
+        // web API, config); hand them to the frame processor every
+        // iteration on the GL thread. A no-op unless a value changed.
+        if (m_ui && m_frameProcessor)
+        {
+            SourceAdjustments adj;
+            adj.colorRange = static_cast<SourceColorRange>(m_ui->getColorRange());
+            adj.saturation = m_ui->getSaturation();
+            adj.gamma = m_ui->getGamma();
+            adj.expandAfterDecode = m_ui->getExpandLimitedAfterDecode();
+            adj.deinterlace = static_cast<DeinterlaceMode>(m_ui->getDeinterlaceMode());
+            adj.fieldOrder = static_cast<FieldOrder>(m_ui->getFieldOrder());
+            m_frameProcessor->setSourceAdjustments(adj);
+        }
+
         if (shouldProcess && !m_isReconfiguring)
         {
             // Double-check that capture is still open and not being reconfigured
@@ -1944,7 +2002,10 @@ void Application::run()
                     {
                         break; // Stop processing if reconfiguration started
                     }
-                    newFrame = m_frameProcessor->processFrame(m_capture.get());
+                    {
+                        LoopProfiler::Scope prof(LoopProfiler::Capture);
+                        newFrame = m_frameProcessor->processFrame(m_capture.get());
+                    }
 
                     if (newFrame && m_frameProcessor->hasValidFrame() && m_frameProcessor->getTexture() != 0)
                     {
@@ -1969,7 +2030,12 @@ void Application::run()
         {
             // true → this frame was already presented (invalid-dims early-out),
             // skip the rest of the iteration exactly as the old inline continue did.
-            if (m_pipeline->renderAndDistributeFrame())
+            bool presented = false;
+            {
+                LoopProfiler::Scope prof(LoopProfiler::Render);
+                presented = m_pipeline->renderAndDistributeFrame();
+            }
+            if (presented)
                 continue;
         }
         else
@@ -2118,6 +2184,16 @@ void Application::shutdown()
         glDeleteFramebuffers(1, &m_shaderSourceFBO);
         m_shaderSourceFBO = 0;
     }
+    if (m_sourceCropTexture != 0)
+    {
+        glDeleteTextures(1, &m_sourceCropTexture);
+        m_sourceCropTexture = 0;
+    }
+    if (m_sourceCropFBO != 0)
+    {
+        glDeleteFramebuffers(1, &m_sourceCropFBO);
+        m_sourceCropFBO = 0;
+    }
 
     if (m_frameProcessor)
     {
@@ -2135,6 +2211,18 @@ void Application::shutdown()
         m_capture->stopCapture();
         m_capture->close();
         m_capture.reset();
+    }
+
+    // #247 — frame-generation GL objects, while the context is current.
+    if (m_pipeline)
+    {
+        m_pipeline->releaseGL();
+    }
+
+    if (m_upscaler)
+    {
+        m_upscaler->shutdown(); // #251
+        m_upscaler.reset();
     }
 
     if (m_shaderEngine)
@@ -2464,6 +2552,12 @@ void Application::applyPreset(const std::string &presetName)
         m_captureFps = data.captureFps;
     }
 
+    // #225 — source crop (only presets that carry one)
+    if (data.hasSourceCrop && m_ui)
+    {
+        m_ui->setSourceCrop(data.sourceCrop);
+    }
+
     // 4. Apply image settings
     // Note: fullscreen and monitorIndex are NOT applied - they vary per user/system
     m_brightness = data.imageBrightness;
@@ -2494,6 +2588,14 @@ void Application::applyPreset(const std::string &presetName)
         // Update image settings
         m_ui->setBrightness(m_brightness);
         m_ui->setContrast(m_contrast);
+        m_ui->setSaturation(data.imageSaturation);
+        m_ui->setGamma(data.imageGamma);
+        m_ui->setColorRange(data.imageColorRange);
+        m_ui->setExpandLimitedAfterDecode(data.imageExpandLimitedAfterDecode);
+        m_ui->setSourceDownscaleFilter(data.imageDownscaleFilter);
+        m_ui->setUpscalerSettings(data.upscaler); // #251
+        m_ui->setDeinterlaceMode(data.deinterlaceMode);
+        m_ui->setFieldOrder(data.fieldOrder);
         m_ui->setMaintainAspect(m_maintainAspect);
         // fullscreen and monitorIndex are NOT updated - they vary per user/system
 
@@ -2653,10 +2755,28 @@ void Application::createPresetFromCurrentState(const std::string &name, const st
         // devicePath is NOT saved - varies between systems
     }
 
+    // #225 — source crop
+    if (m_ui)
+    {
+        data.hasSourceCrop = true;
+        data.sourceCrop = m_ui->getSourceCrop();
+    }
+
     // Collect image settings
     // Note: fullscreen and monitorIndex are NOT saved - they can vary
     data.imageBrightness = m_brightness;
     data.imageContrast = m_contrast;
+    if (m_ui)
+    {
+        data.imageSaturation = m_ui->getSaturation();
+        data.imageGamma = m_ui->getGamma();
+        data.imageColorRange = m_ui->getColorRange();
+        data.imageExpandLimitedAfterDecode = m_ui->getExpandLimitedAfterDecode();
+        data.imageDownscaleFilter = m_ui->getSourceDownscaleFilter();
+        data.upscaler = m_ui->getUpscalerSettings(); // #251
+        data.deinterlaceMode = m_ui->getDeinterlaceMode();
+        data.fieldOrder = m_ui->getFieldOrder();
+    }
     data.maintainAspect = m_maintainAspect;
     // fullscreen is NOT saved - varies per user preference
     // monitorIndex is NOT saved - varies per system

@@ -18,6 +18,7 @@
 #include "../osd/QuickActionsOverlay.h"
 #include "../osd/ConnectionStatusOverlay.h"
 #include "../osd/OSDChat.h"
+#include "../osd/FpsOverlay.h"
 #include "UICredits.h"
 #include "UIRemoteConnection.h"
 #include "UIDirectoryBrowser.h"
@@ -85,6 +86,7 @@ UIManager::~UIManager()
 #endif
     m_infoWindow.reset();
     m_preferencesWindow.reset();
+    m_fpsOverlay.reset();
     m_shortcutsHelpWindow.reset();
     m_connectionOverlay.reset();
     m_quickActionsOverlay.reset();
@@ -314,6 +316,9 @@ bool UIManager::init(void *window)
     // F12-gated unlike the OSD.
     m_shortcutsHelpWindow = std::make_unique<UIShortcutsHelp>(this);
     m_shortcutsHelpWindow->setVisible(m_shortcutsHelpVisible);
+    // FPS counter OSD (#226) — stacks clear of quick actions / shortcuts.
+    m_fpsOverlay = std::make_unique<FpsOverlay>(
+        this, m_quickActionsOverlay.get(), m_shortcutsHelpWindow.get());
 
     m_creditsWindow = std::make_unique<UICredits>(this);
     m_capturePresetsWindow = std::make_unique<UICapturePresets>(this);
@@ -550,6 +555,13 @@ void UIManager::render()
     // Chat overlay (#84) — also outside the m_uiVisible gate so the
     // user can keep an eye on chat while everything else is hidden.
     if (m_chatOverlay) m_chatOverlay->render();
+    // FPS counter (#226). tick() measures every frame so the web API has
+    // numbers even while the overlay is off; render() is a no-op then.
+    if (m_fpsOverlay)
+    {
+        m_fpsOverlay->tick();
+        m_fpsOverlay->render();
+    }
     // Directory browser (#84) — promoted from the regular UI layer
     // to the OSD layer so it stays reachable when F12 hides the
     // config windows. Same one-button entry from QuickActions
@@ -2663,6 +2675,63 @@ std::string UIManager::getConfigPath() const
     return "retrocapture_config.json";
 }
 
+void UIManager::setLegacyOverscanAxis(bool horizontal, float pct)
+{
+    // Legacy X/Y setters (pre-#225 web API): a percentage applied to both
+    // sides of the axis, in the crop's current unit.
+    if (pct < 0.0f)
+        pct = 0.0f;
+    const int a = horizontal ? SourceCrop::Left : SourceCrop::Top;
+    float v = pct;
+    if (m_sourceCrop.unit == SourceCrop::Pixels)
+    {
+        const uint32_t dim = horizontal ? m_captureTexW : m_captureTexH;
+        v = static_cast<float>(static_cast<int>(pct * static_cast<float>(dim) / 100.0f + 0.5f));
+    }
+    if (m_sourceCrop.link == SourceCrop::LinkAll)
+    {
+        m_sourceCrop.setSide(a, v);
+        return;
+    }
+    m_sourceCrop.value[a] = v;
+    m_sourceCrop.value[a + 1] = v;
+}
+
+void UIManager::applySourceAutoCrop(bool found, uint32_t top, uint32_t bottom,
+                                    uint32_t left, uint32_t right,
+                                    uint32_t srcW, uint32_t srcH)
+{
+    if (!found || srcW == 0 || srcH == 0)
+    {
+        m_autoCropState.store(static_cast<int>(AutoCropState::NoSignal));
+        return;
+    }
+    if (top == 0 && bottom == 0 && left == 0 && right == 0)
+    {
+        m_autoCropState.store(static_cast<int>(AutoCropState::NoBorders));
+        return;
+    }
+    SourceCrop crop = m_sourceCrop;
+    const uint32_t px[4] = {top, bottom, left, right};
+    for (int side = 0; side < 4; ++side)
+    {
+        const bool horiz = (side == SourceCrop::Left || side == SourceCrop::Right);
+        const float dim = static_cast<float>(horiz ? srcW : srcH);
+        crop.value[side] = (crop.unit == SourceCrop::Pixels)
+                               ? static_cast<float>(px[side])
+                               : static_cast<float>(px[side]) * 100.0f / dim;
+    }
+    // Keep the link mode only if the detected borders satisfy it.
+    if (crop.link == SourceCrop::LinkAll &&
+        !(top == bottom && top == left && top == right))
+        crop.link = (top == bottom && left == right) ? SourceCrop::LinkPairs : SourceCrop::LinkNone;
+    if (crop.link == SourceCrop::LinkPairs && !(top == bottom && left == right))
+        crop.link = SourceCrop::LinkNone;
+    m_sourceCrop = crop;
+    m_autoCropState.store(static_cast<int>(AutoCropState::Done));
+    saveConfig();
+}
+
 void UIManager::loadConfig()
 {
     std::string configPath = getConfigPath();
@@ -2838,12 +2907,79 @@ void UIManager::loadConfig()
                 m_captureHeight = capture["height"].get<uint32_t>();
             if (capture.contains("fps"))
                 m_captureFps = capture["fps"].get<uint32_t>();
-            if (capture.contains("sourceOverscanX"))
-                m_sourceOverscanPercentX = capture["sourceOverscanX"].get<float>();
-            if (capture.contains("sourceOverscanY"))
-                m_sourceOverscanPercentY = capture["sourceOverscanY"].get<float>();
-            if (capture.contains("sourceOverscanLocked"))
-                m_sourceOverscanLocked = capture["sourceOverscanLocked"].get<bool>();
+            // #225 — 4-side crop. Configs written before it only carry the
+            // symmetric overscan: X maps to left = right, Y to top = bottom
+            // (percent), and the old X/Y lock to "all sides linked".
+            if (capture.contains("sourceCrop") && capture["sourceCrop"].is_object())
+            {
+                const auto &c = capture["sourceCrop"];
+                SourceCrop crop;
+                crop.value[SourceCrop::Top] = c.value("top", 0.0f);
+                crop.value[SourceCrop::Bottom] = c.value("bottom", 0.0f);
+                crop.value[SourceCrop::Left] = c.value("left", 0.0f);
+                crop.value[SourceCrop::Right] = c.value("right", 0.0f);
+                crop.unit = SourceCrop::unitFromName(c.value("unit", std::string("percent")).c_str(), SourceCrop::Percent);
+                crop.link = SourceCrop::linkFromName(c.value("link", std::string("none")).c_str(), SourceCrop::LinkNone);
+                m_sourceCrop = crop;
+                if (c.contains("autoCropThreshold") && c["autoCropThreshold"].is_number_integer())
+                    m_autoCropThreshold = c["autoCropThreshold"].get<int>();
+            }
+            else if (capture.contains("sourceOverscanX") || capture.contains("sourceOverscanY"))
+            {
+                const float x = capture.value("sourceOverscanX", 0.0f);
+                const float y = capture.value("sourceOverscanY", 0.0f);
+                const bool locked = capture.value("sourceOverscanLocked", true);
+                SourceCrop crop;
+                crop.value[SourceCrop::Left] = crop.value[SourceCrop::Right] = x;
+                crop.value[SourceCrop::Top] = crop.value[SourceCrop::Bottom] = y;
+                crop.unit = SourceCrop::Percent;
+                // Old "locked" kept X == Y; only keep all four linked when
+                // they really are equal, otherwise left/right + top/bottom.
+                crop.link = (locked && x == y) ? SourceCrop::LinkAll : SourceCrop::LinkPairs;
+                m_sourceCrop = crop;
+            }
+        }
+
+        // #229 — deinterlacing (own block; absent in older configs = Off)
+        if (config.contains("deinterlace"))
+        {
+            auto &deint = config["deinterlace"];
+            if (deint.contains("mode"))
+                setDeinterlaceMode(deint["mode"].get<int>());
+            if (deint.contains("fieldOrder"))
+                setFieldOrder(deint["fieldOrder"].get<int>());
+        }
+
+        // #247 — frame generation (own block; absent in older configs = off)
+        if (config.contains("frameGeneration") && config["frameGeneration"].is_object())
+        {
+            auto &fg = config["frameGeneration"];
+            FrameGenSettings g;
+            if (fg.contains("mode") && fg["mode"].is_string())
+            {
+                const int m = FrameGenSettings::modeFromName(fg["mode"].get<std::string>());
+                if (m >= 0) g.mode = m;
+            }
+            if (fg.contains("method") && fg["method"].is_string())
+            {
+                const int m = FrameGenSettings::methodFromName(fg["method"].get<std::string>());
+                if (m >= 0) g.method = m;
+            }
+            if (fg.contains("protectStatic") && fg["protectStatic"].is_boolean())
+                g.protectStatic = fg["protectStatic"].get<bool>();
+            if (fg.contains("skipRepeats") && fg["skipRepeats"].is_boolean())
+                g.skipRepeats = fg["skipRepeats"].get<bool>();
+            if (fg.contains("outputs") && fg["outputs"].is_object())
+            {
+                auto &o = fg["outputs"];
+                if (o.contains("window") && o["window"].is_boolean()) g.window = o["window"].get<bool>();
+                if (o.contains("stream") && o["stream"].is_boolean()) g.stream = o["stream"].get<bool>();
+                if (o.contains("recording") && o["recording"].is_boolean()) g.record = o["recording"].get<bool>();
+                if (o.contains("virtualCamera") && o["virtualCamera"].is_boolean())
+                    g.virtcam = o["virtualCamera"].get<bool>();
+            }
+            std::lock_guard<std::mutex> lock(m_frameGenMutex);
+            m_frameGen = g;
         }
 
         // Carregar configurações de imagem
@@ -2854,6 +2990,16 @@ void UIManager::loadConfig()
                 m_brightness = image["brightness"];
             if (image.contains("contrast"))
                 m_contrast = image["contrast"];
+            if (image.contains("saturation"))
+                m_saturation = image["saturation"].get<float>();
+            if (image.contains("gamma"))
+                m_gamma = image["gamma"].get<float>();
+            if (image.contains("colorRange"))
+                setColorRange(image["colorRange"].get<int>());
+            if (image.contains("expandLimitedAfterDecode"))
+                m_expandLimitedAfterDecode = image["expandLimitedAfterDecode"].get<bool>();
+            if (image.contains("downscaleFilter") && image["downscaleFilter"].is_number_integer())
+                setSourceDownscaleFilter(image["downscaleFilter"].get<int>());
             if (image.contains("maintainAspect"))
                 m_maintainAspect = image["maintainAspect"];
             if (image.contains("fullscreen"))
@@ -2864,6 +3010,50 @@ void UIManager::loadConfig()
                 m_outputWidth = image["outputWidth"].get<uint32_t>();
             if (image.contains("outputHeight"))
                 m_outputHeight = image["outputHeight"].get<uint32_t>();
+            // #226 — absent in older configs; defaults apply.
+            if (image.contains("fpsOverlay") && image["fpsOverlay"].is_object())
+            {
+                auto &fps = image["fpsOverlay"];
+                if (fps.contains("enabled") && fps["enabled"].is_boolean())
+                    m_fpsOverlayEnabled = fps["enabled"].get<bool>();
+                if (fps.contains("corner") && fps["corner"].is_string())
+                {
+                    const int corner = fpsOverlayCornerFromName(fps["corner"].get<std::string>());
+                    if (corner >= 0) m_fpsOverlayCorner = corner;
+                }
+                if (fps.contains("compact") && fps["compact"].is_boolean())
+                    m_fpsOverlayCompact = fps["compact"].get<bool>();
+                if (fps.contains("graph") && fps["graph"].is_boolean())
+                    m_fpsOverlayGraph = fps["graph"].get<bool>();
+            }
+            // #227 — output geometry (absent in older configs: defaults).
+            {
+                std::lock_guard<std::mutex> lock(m_outputGeometryMutex);
+                OutputGeometry &g = m_outputGeometry;
+                if (image.contains("integerScale") && image["integerScale"].is_number_integer())
+                    g.integerScale = static_cast<OutputGeometry::IntegerScale>(
+                        std::max(0, std::min(2, image["integerScale"].get<int>())));
+                if (image.contains("aspectMode") && image["aspectMode"].is_number_integer())
+                    g.aspect = static_cast<OutputGeometry::Aspect>(
+                        std::max(0, std::min(6, image["aspectMode"].get<int>())));
+                if (image.contains("customAspectW") && image["customAspectW"].is_number())
+                    g.customAspectW = image["customAspectW"].get<float>();
+                if (image.contains("customAspectH") && image["customAspectH"].is_number())
+                    g.customAspectH = image["customAspectH"].get<float>();
+                if (image.contains("rotation") && image["rotation"].is_number_integer())
+                    g.rotation = OutputGeometry::normalizeRotation(image["rotation"].get<int>());
+                if (image.contains("flipH") && image["flipH"].is_boolean())
+                    g.flipH = image["flipH"].get<bool>();
+                if (image.contains("flipV") && image["flipV"].is_boolean())
+                    g.flipV = image["flipV"].get<bool>();
+            }
+            // #251 — built-in upscaler (absent in older configs: Off).
+            if (image.contains("upscaler") && image["upscaler"].is_object())
+            {
+                UpscalerSettings u;
+                u.applyJson(image["upscaler"]);
+                setUpscalerSettings(u);
+            }
         }
 
         // Carregar configurações do Web Portal
@@ -3324,15 +3514,59 @@ void UIManager::saveConfig()
                            : m_chatConfig.overlayVisible},
         };
 
+        // #229 — deinterlacing
+        config["deinterlace"] = {
+            {"mode", m_deinterlaceMode},
+            {"fieldOrder", m_fieldOrder}};
+
+        // #247 — frame generation
+        {
+            const FrameGenSettings g = getFrameGenSettings();
+            config["frameGeneration"] = {
+                {"mode", FrameGenSettings::modeName(g.mode)},
+                {"method", FrameGenSettings::methodName(g.method)},
+                {"protectStatic", g.protectStatic},
+                {"skipRepeats", g.skipRepeats},
+                {"outputs", {
+                    {"window", g.window},
+                    {"stream", g.stream},
+                    {"recording", g.record},
+                    {"virtualCamera", g.virtcam},
+                }}};
+        }
+
         // Salvar configurações de imagem
         config["image"] = {
             {"brightness", m_brightness},
             {"contrast", m_contrast},
+            {"saturation", m_saturation},
+            {"gamma", m_gamma},
+            {"colorRange", m_colorRange},
+            {"expandLimitedAfterDecode", m_expandLimitedAfterDecode},
+            {"downscaleFilter", m_sourceDownscaleFilter},
             {"maintainAspect", m_maintainAspect},
             {"fullscreen", m_fullscreen},
             {"monitorIndex", m_monitorIndex},
             {"outputWidth", m_outputWidth},
-            {"outputHeight", m_outputHeight}};
+            {"outputHeight", m_outputHeight},
+            {"fpsOverlay", {
+                {"enabled", m_fpsOverlayEnabled},
+                {"corner",  fpsOverlayCornerName(m_fpsOverlayCorner)},
+                {"compact", m_fpsOverlayCompact},
+                {"graph",   m_fpsOverlayGraph},
+            }}};
+        {
+            // #227 — output geometry.
+            const OutputGeometry g = getOutputGeometry();
+            config["image"]["integerScale"] = static_cast<int>(g.integerScale);
+            config["image"]["aspectMode"] = static_cast<int>(g.aspect);
+            config["image"]["customAspectW"] = g.customAspectW;
+            config["image"]["customAspectH"] = g.customAspectH;
+            config["image"]["rotation"] = g.rotation;
+            config["image"]["flipH"] = g.flipH;
+            config["image"]["flipV"] = g.flipV;
+        }
+        config["image"]["upscaler"] = getUpscalerSettings().toJson(); // #251
 
         // Salvar configurações do Web Portal
         config["webPortal"] = {
@@ -3352,9 +3586,19 @@ void UIManager::saveConfig()
             {"width", m_captureWidth},
             {"height", m_captureHeight},
             {"fps", m_captureFps},
-            {"sourceOverscanX", m_sourceOverscanPercentX},
-            {"sourceOverscanY", m_sourceOverscanPercentY},
-            {"sourceOverscanLocked", m_sourceOverscanLocked}};
+            {"sourceCrop", {
+                {"top", m_sourceCrop.value[SourceCrop::Top]},
+                {"bottom", m_sourceCrop.value[SourceCrop::Bottom]},
+                {"left", m_sourceCrop.value[SourceCrop::Left]},
+                {"right", m_sourceCrop.value[SourceCrop::Right]},
+                {"unit", SourceCrop::unitName(m_sourceCrop.unit)},
+                {"link", SourceCrop::linkName(m_sourceCrop.link)},
+                {"autoCropThreshold", m_autoCropThreshold}}},
+            // Legacy symmetric keys (pre-#225), kept so an older build
+            // reading this config still gets an approximate crop.
+            {"sourceOverscanX", getSourceOverscanPercentX()},
+            {"sourceOverscanY", getSourceOverscanPercentY()},
+            {"sourceOverscanLocked", getSourceOverscanLocked()}};
 
         // Salvar shader atual
         config["shader"] = {
@@ -4250,4 +4494,24 @@ void UIManager::renderConnectionOverlay()
     // callers (Application's render path) don't need to learn about
     // the new location.
     if (m_connectionOverlay) m_connectionOverlay->render();
+}
+
+const char *UIManager::fpsOverlayCornerName(int corner)
+{
+    switch (corner)
+    {
+    case 1:  return "top-right";
+    case 2:  return "bottom-left";
+    case 3:  return "bottom-right";
+    default: return "top-left";
+    }
+}
+
+int UIManager::fpsOverlayCornerFromName(const std::string &name)
+{
+    if (name == "top-left")     return 0;
+    if (name == "top-right")    return 1;
+    if (name == "bottom-left")  return 2;
+    if (name == "bottom-right") return 3;
+    return -1;
 }

@@ -8,7 +8,7 @@ let appState = {
     shader: { name: '' },
     shaderParameters: [],
     capture: { width: 0, height: 0, fps: 0 },
-    image: { brightness: 0, contrast: 1, maintainAspect: false, fullscreen: false },
+    image: { brightness: 1, contrast: 1, maintainAspect: false, fullscreen: false },
     streaming: {},
     recording: {},
     v4l2: { devices: [], controls: [], currentDevice: '' },
@@ -1058,36 +1058,45 @@ async function loadImageSettings() {
         const settings = await api.getImageSettings();
         appState.image = settings;
         
-        const brightnessEl = document.getElementById('brightness');
-        const contrastEl = document.getElementById('contrast');
         const maintainAspectEl = document.getElementById('maintainAspect');
         const fullscreenEl = document.getElementById('fullscreen');
         const monitorIndexEl = document.getElementById('monitorIndex');
         const outputWidthEl = document.getElementById('outputWidth');
         const outputHeightEl = document.getElementById('outputHeight');
         
-        if (brightnessEl) {
-            brightnessEl.value = settings.brightness || 0;
-            const brightnessValueEl = document.getElementById('brightnessValue');
-            if (brightnessValueEl) {
-                brightnessValueEl.textContent = (settings.brightness || 0).toFixed(2);
-            }
-        }
+        // Brightness/contrast are multipliers: 1.0 = unchanged (#242).
+        // Use explicit undefined checks so a legitimate 0 isn't replaced.
+        setSliderWithBadge('brightness', settings.brightness !== undefined ? settings.brightness : 1);
+        setSliderWithBadge('contrast', settings.contrast !== undefined ? settings.contrast : 1);
         
-        if (contrastEl) {
-            contrastEl.value = settings.contrast || 1;
-            const contrastValueEl = document.getElementById('contrastValue');
-            if (contrastValueEl) {
-                contrastValueEl.textContent = (settings.contrast || 1).toFixed(2);
-            }
+        // #228 — source colour controls
+        setSliderWithBadge('saturation', settings.saturation !== undefined ? settings.saturation : 1);
+        setSliderWithBadge('gamma', settings.gamma !== undefined ? settings.gamma : 1);
+        const colorRangeEl = document.getElementById('colorRange');
+        if (colorRangeEl) {
+            colorRangeEl.value = settings.colorRange || 'auto';
         }
-        
+        // #243
+        const expandAfterEl = document.getElementById('expandLimitedAfterDecode');
+        if (expandAfterEl) {
+            expandAfterEl.checked = settings.expandLimitedAfterDecode === true;
+        }
+        const downscaleEl = document.getElementById('downscaleFilter');
+        if (downscaleEl) {
+            downscaleEl.value = settings.downscaleFilter || 'auto';
+        }
+
         if (maintainAspectEl) {
             maintainAspectEl.checked = settings.maintainAspect || false;
         }
         
         if (fullscreenEl) {
             fullscreenEl.checked = settings.fullscreen || false;
+        }
+
+        const fpsOverlayEl = document.getElementById('fpsOverlay');
+        if (fpsOverlayEl) {
+            fpsOverlayEl.checked = settings.fpsOverlay || false;
         }
         
         if (monitorIndexEl) {
@@ -1112,6 +1121,17 @@ async function loadImageSettings() {
     } catch (error) {
         console.error('Failed to load image configuration:', error);
     }
+}
+
+/**
+ * Sets a range input and its "<id>Value" badge (#228).
+ */
+function setSliderWithBadge(id, value) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.value = value;
+    const badge = document.getElementById(id + 'Value');
+    if (badge) badge.textContent = parseFloat(value).toFixed(2);
 }
 
 /**
@@ -1149,14 +1169,29 @@ async function updateImageSettings() {
         const outputHeightEl = document.getElementById('outputHeight');
         
         const settings = {
-            brightness: brightnessEl ? parseFloat(brightnessEl.value) : 0,
+            brightness: brightnessEl ? parseFloat(brightnessEl.value) : 1,
             contrast: contrastEl ? parseFloat(contrastEl.value) : 1,
+            saturation: document.getElementById('saturation') ? parseFloat(document.getElementById('saturation').value) : 1,
+            gamma: document.getElementById('gamma') ? parseFloat(document.getElementById('gamma').value) : 1,
+            colorRange: document.getElementById('colorRange') ? document.getElementById('colorRange').value : 'auto',
             maintainAspect: maintainAspectEl ? maintainAspectEl.checked : false,
             fullscreen: fullscreenEl ? fullscreenEl.checked : false,
             monitorIndex: monitorIndexEl ? parseInt(monitorIndexEl.value) : -1,
             outputWidth: outputWidthEl ? parseInt(outputWidthEl.value) : 0,
             outputHeight: outputHeightEl ? parseInt(outputHeightEl.value) : 0
         };
+        const fpsOverlayEl = document.getElementById('fpsOverlay');
+        if (fpsOverlayEl) {
+            settings.fpsOverlay = fpsOverlayEl.checked;
+        }
+        const expandAfterEl = document.getElementById('expandLimitedAfterDecode');
+        if (expandAfterEl) {
+            settings.expandLimitedAfterDecode = expandAfterEl.checked; // #243
+        }
+        const downscaleEl = document.getElementById('downscaleFilter');
+        if (downscaleEl) {
+            settings.downscaleFilter = downscaleEl.value;
+        }
         
         await api.setImageSettings(settings);
         
@@ -1164,6 +1199,11 @@ async function updateImageSettings() {
         appState.image = {
             brightness: settings.brightness,
             contrast: settings.contrast,
+            saturation: settings.saturation,
+            gamma: settings.gamma,
+            colorRange: settings.colorRange,
+            expandLimitedAfterDecode: settings.expandLimitedAfterDecode,
+            downscaleFilter: settings.downscaleFilter,
             maintainAspect: settings.maintainAspect,
             fullscreen: settings.fullscreen
         };
@@ -1428,11 +1468,11 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Event listeners para sliders
     document.getElementById('brightness').addEventListener('input', function() {
-        document.getElementById('brightnessValue').textContent = parseFloat(this.value).toFixed(2);
+        setSliderWithBadge('brightness', this.value);
     });
     
     document.getElementById('contrast').addEventListener('input', function() {
-        document.getElementById('contrastValue').textContent = parseFloat(this.value).toFixed(2);
+        setSliderWithBadge('contrast', this.value);
     });
     
     // Event listener para mudança de tipo de fonte - aplica automaticamente
@@ -1558,11 +1598,59 @@ document.addEventListener('DOMContentLoaded', function() {
         contrast.addEventListener('input', updateImageSettingsDebounced);
         contrast.addEventListener('change', updateImageSettingsDebounced);
     }
+    // #228 — source colour controls
+    ['saturation', 'gamma'].forEach(function(id) {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.addEventListener('input', function() {
+            setSliderWithBadge(id, this.value);
+            updateImageSettingsDebounced();
+        });
+        el.addEventListener('change', updateImageSettingsDebounced);
+    });
+    const colorRangeSel = document.getElementById('colorRange');
+    if (colorRangeSel) {
+        colorRangeSel.addEventListener('change', updateImageSettingsDebounced);
+    }
+    const expandAfterChk = document.getElementById('expandLimitedAfterDecode');
+    if (expandAfterChk) {
+        expandAfterChk.addEventListener('change', updateImageSettingsDebounced); // #243
+    }
+    const downscaleSel = document.getElementById('downscaleFilter');
+    if (downscaleSel) {
+        downscaleSel.addEventListener('change', updateImageSettingsDebounced);
+    }
+    // #242 — per-slider reset buttons (data-reset-target / data-reset-value).
+    document.querySelectorAll('.slider-reset').forEach(function(btn) {
+        btn.addEventListener('click', function(ev) {
+            ev.preventDefault();
+            const target = btn.getAttribute('data-reset-target');
+            const value = parseFloat(btn.getAttribute('data-reset-value'));
+            setSliderWithBadge(target, isNaN(value) ? 1 : value);
+            updateImageSettings();
+        });
+    });
+    const resetColorBtn = document.getElementById('resetColor');
+    if (resetColorBtn) {
+        resetColorBtn.addEventListener('click', function() {
+            setSliderWithBadge('brightness', 1);
+            setSliderWithBadge('contrast', 1);
+            setSliderWithBadge('saturation', 1);
+            setSliderWithBadge('gamma', 1);
+            if (colorRangeSel) colorRangeSel.value = 'auto';
+            if (expandAfterChk) expandAfterChk.checked = false;
+            updateImageSettings();
+        });
+    }
     if (maintainAspect) {
         maintainAspect.addEventListener('change', updateImageSettingsDebounced);
     }
     if (fullscreen) {
         fullscreen.addEventListener('change', updateImageSettingsDebounced);
+    }
+    const fpsOverlay = document.getElementById('fpsOverlay');
+    if (fpsOverlay) {
+        fpsOverlay.addEventListener('change', updateImageSettingsDebounced);
     }
     if (monitorIndex) {
         monitorIndex.addEventListener('input', updateImageSettingsDebounced);
@@ -2619,94 +2707,388 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
 // ============================================================
-// Source overscan — mirrors the native UI's Source Overscan
-// section. X/Y sliders share a "lock" toggle that copies one onto
-// the other; values are persisted server-side via the new
-// /api/v1/source/overscan endpoint.
+// #229 — Deinterlacing (mode + field order) via /api/v1/source/deinterlace.
 // ============================================================
 
-let _overscanLoaded = false;
-let _overscanLocked = false;
-
-function fmtOverscan(v) {
-    return Number(v).toFixed(1) + '%';
-}
-
-async function loadOverscan() {
+async function loadDeinterlace() {
     try {
-        const data = await api.getSourceOverscan();
-        const xEl = document.getElementById('overscanX');
-        const yEl = document.getElementById('overscanY');
-        const lockEl = document.getElementById('overscanLocked');
-        if (!xEl || !yEl || !lockEl) return;
-        xEl.value = data.x ?? 0;
-        yEl.value = data.y ?? 0;
-        lockEl.checked = !!data.locked;
-        _overscanLocked = lockEl.checked;
-        document.getElementById('overscanXValue').textContent = fmtOverscan(xEl.value);
-        document.getElementById('overscanYValue').textContent = fmtOverscan(yEl.value);
-        _overscanLoaded = true;
+        const data = await api.getSourceDeinterlace();
+        const modeEl = document.getElementById('deinterlaceMode');
+        const orderEl = document.getElementById('fieldOrder');
+        if (modeEl) modeEl.value = data.mode || 'off';
+        if (orderEl) orderEl.value = data.fieldOrder || 'auto';
     } catch (err) {
-        console.warn('Failed to load overscan:', err);
+        console.warn('Failed to load deinterlace settings:', err);
     }
 }
 
-const _overscanThrottle = { pending: null, timer: null };
-function commitOverscan() {
-    if (!_overscanLoaded) return;
-    const xEl = document.getElementById('overscanX');
-    const yEl = document.getElementById('overscanY');
-    const payload = {
-        x: parseFloat(xEl.value),
-        y: parseFloat(yEl.value),
-        locked: _overscanLocked,
-    };
-    _overscanThrottle.pending = payload;
-    if (_overscanThrottle.timer) return;
-    _overscanThrottle.timer = setTimeout(async () => {
-        const p = _overscanThrottle.pending;
-        _overscanThrottle.timer = null;
-        _overscanThrottle.pending = null;
+async function commitDeinterlace() {
+    const modeEl = document.getElementById('deinterlaceMode');
+    const orderEl = document.getElementById('fieldOrder');
+    if (!modeEl || !orderEl) return;
+    try {
+        await api.setSourceDeinterlace(modeEl.value, orderEl.value);
+    } catch (err) {
+        console.warn('Failed to set deinterlace settings:', err);
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    const modeEl = document.getElementById('deinterlaceMode');
+    const orderEl = document.getElementById('fieldOrder');
+    if (!modeEl || !orderEl) return;
+    modeEl.addEventListener('change', commitDeinterlace);
+    orderEl.addEventListener('change', commitDeinterlace);
+    loadDeinterlace();
+});
+
+// ============================================================
+// #247 — Frame generation via /api/v1/frame-generation.
+// ============================================================
+
+const FRAMEGEN_OUTPUTS = {
+    frameGenOutWindow: 'window',
+    frameGenOutStream: 'stream',
+    frameGenOutRecording: 'recording',
+    frameGenOutVirtcam: 'virtualCamera',
+};
+
+function renderFrameGenStatus(data) {
+    const el = document.getElementById('frameGenStatus');
+    if (!el || !data || !data.status) return;
+    const st = data.status;
+    const tr = (key, fallback) =>
+        (typeof window.t === 'function' && window.t(key) !== key) ? window.t(key) : fallback;
+    if (!st.supported) {
+        el.textContent = tr('web.config.image.framegen_unsupported', 'Not available on this GPU (needs OpenGL 3.3 / GLES 3.0).');
+    } else if (st.active) {
+        const out = st.outputFps > 0 ? st.outputFps.toFixed(2) + ' fps' : tr('web.config.image.framegen_per_refresh', 'one frame per refresh');
+        const game = (data.skipRepeats && st.captureFps > 0 && st.sourceFps > 0 && st.sourceFps < st.captureFps * 0.9)
+            ? tr('web.config.image.framegen_game', 'game') + ' ' : '';
+        el.textContent = game + st.sourceFps.toFixed(2) + ' fps \u2192 ' + out +
+            ' (+' + st.addedLatencyMs.toFixed(1) + ' ms) \u2014 ' +
+            st.realFps.toFixed(1) + ' real + ' + st.generatedFps.toFixed(1) + ' gen';
+    } else {
+        el.textContent = '';
+    }
+    // #256 — configuration hints.
+    const hints = [];
+    if (data.mode === 'fill' && data.skipRepeats === false) {
+        hints.push(tr('web.config.image.framegen_fill_needs_skip', 'Match capture rate needs "Skip repeated frames".'));
+    }
+    if (data.method === 'rife' && st.active && st.sourceHeight > 720) {
+        hints.push(tr('web.config.image.framegen_rife_above_720', 'RIFE above 720p may stutter; Motion stays smooth at this size.'));
+    }
+    if (hints.length) el.textContent = (el.textContent ? el.textContent + ' \u2014 ' : '') + hints.join(' ');
+    // #248 — RIFE backend state (falls back to Motion when unavailable).
+    const rife = st.rife;
+    if (data.method === 'rife' && rife) {
+        let note = '';
+        if (!rife.compiled || rife.state === 'unavailable') {
+            note = tr('web.config.image.framegen_rife_unavailable', 'RIFE unavailable, using Motion:') + ' ' + rife.reason;
+        } else if (rife.state === 'loading') {
+            note = tr('web.config.image.framegen_rife_loading', 'RIFE: loading the model (Motion meanwhile)');
+        } else if (rife.state === 'ready') {
+            note = 'RIFE: ' + rife.device + ', ' + rife.inferMs.toFixed(1) + ' ms/frame, ' + rife.late + ' late';
+        }
+        if (note) el.textContent = (el.textContent ? el.textContent + ' — ' : '') + note;
+    }
+}
+
+function applyFrameGenToForm(data) {
+    if (!data) return;
+    const modeEl = document.getElementById('frameGenMode');
+    const methodEl = document.getElementById('frameGenMethod');
+    const protectEl = document.getElementById('frameGenProtectStatic');
+    if (modeEl) modeEl.value = data.mode || 'off';
+    if (methodEl) methodEl.value = data.method || 'motion';
+    if (protectEl) protectEl.checked = !!data.protectStatic;
+    const skipEl = document.getElementById('frameGenSkipRepeats');
+    if (skipEl) skipEl.checked = data.skipRepeats !== false;
+    const outputs = data.outputs || {};
+    for (const [id, key] of Object.entries(FRAMEGEN_OUTPUTS)) {
+        const el = document.getElementById(id);
+        if (el) {
+            el.checked = outputs[key] !== false;
+            // Display mode is per window refresh: outputs keep real frames.
+            el.disabled = (data.mode === 'display' && key !== 'window');
+        }
+    }
+    renderFrameGenStatus(data);
+}
+
+async function loadFrameGeneration() {
+    try {
+        applyFrameGenToForm(await api.getFrameGeneration());
+    } catch (err) {
+        console.warn('Failed to load frame generation settings:', err);
+    }
+}
+
+async function commitFrameGeneration() {
+    const modeEl = document.getElementById('frameGenMode');
+    const methodEl = document.getElementById('frameGenMethod');
+    const protectEl = document.getElementById('frameGenProtectStatic');
+    if (!modeEl || !methodEl) return;
+    const outputs = {};
+    for (const [id, key] of Object.entries(FRAMEGEN_OUTPUTS)) {
+        const el = document.getElementById(id);
+        if (el) outputs[key] = el.checked;
+    }
+    try {
+        applyFrameGenToForm(await api.setFrameGeneration({
+            mode: modeEl.value,
+            method: methodEl.value,
+            protectStatic: protectEl ? protectEl.checked : true,
+            skipRepeats: (document.getElementById('frameGenSkipRepeats') || {checked: true}).checked,
+            outputs,
+        }));
+    } catch (err) {
+        console.warn('Failed to set frame generation settings:', err);
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    const modeEl = document.getElementById('frameGenMode');
+    if (!modeEl) return;
+    const ids = ['frameGenMode', 'frameGenMethod', 'frameGenProtectStatic', 'frameGenSkipRepeats', ...Object.keys(FRAMEGEN_OUTPUTS)];
+    for (const id of ids) {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('change', commitFrameGeneration);
+    }
+    loadFrameGeneration();
+    // Live status (rates) while the page is open.
+    setInterval(async () => {
+        if (document.hidden) return;
         try {
-            await api.setSourceOverscan(p.x, p.y, p.locked);
+            renderFrameGenStatus(await api.getFrameGeneration());
+        } catch (err) { /* host offline: keep the last status */ }
+    }, 2000);
+});
+
+// ============================================================
+// #251 — built-in upscaler via the "upscaler" object of
+// /api/v1/image/settings.
+// ============================================================
+
+function syncUpscalerControls() {
+    const target = document.getElementById('upscalerTarget');
+    const custom = target && target.value === 'custom';
+    document.querySelectorAll('.upscaler-custom').forEach(function(el) {
+        el.classList.toggle('d-none', !custom);
+    });
+    const sharp = document.getElementById('upscalerSharpness');
+    const badge = document.getElementById('upscalerSharpnessValue');
+    if (sharp && badge) badge.textContent = parseFloat(sharp.value).toFixed(2);
+}
+
+async function loadUpscaler() {
+    try {
+        const settings = await api.getImageSettings();
+        const up = settings && settings.upscaler;
+        if (!up) return;
+        const set = function(id, v) { const el = document.getElementById(id); if (el && v !== undefined) el.value = v; };
+        set('upscalerMode', up.mode);
+        set('upscalerTarget', up.target);
+        set('upscalerCustomWidth', up.customWidth);
+        set('upscalerCustomHeight', up.customHeight);
+        set('upscalerSharpness', up.sharpness);
+        set('upscalerPosition', up.position);
+        syncUpscalerControls();
+    } catch (err) {
+        console.warn('Failed to load upscaler settings:', err);
+    }
+}
+
+async function commitUpscaler() {
+    const val = function(id) { const el = document.getElementById(id); return el ? el.value : undefined; };
+    const up = {
+        mode: val('upscalerMode'),
+        target: val('upscalerTarget'),
+        customWidth: parseInt(val('upscalerCustomWidth'), 10) || 1920,
+        customHeight: parseInt(val('upscalerCustomHeight'), 10) || 1080,
+        sharpness: parseFloat(val('upscalerSharpness')),
+        position: val('upscalerPosition')
+    };
+    try {
+        await api.setImageSettings({ upscaler: up });
+    } catch (err) {
+        console.warn('Failed to set upscaler settings:', err);
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    const ids = ['upscalerMode', 'upscalerTarget', 'upscalerCustomWidth',
+                 'upscalerCustomHeight', 'upscalerSharpness', 'upscalerPosition'];
+    let present = false;
+    ids.forEach(function(id) {
+        const el = document.getElementById(id);
+        if (!el) return;
+        present = true;
+        el.addEventListener('change', function() { syncUpscalerControls(); commitUpscaler(); });
+        if (id === 'upscalerSharpness') el.addEventListener('input', syncUpscalerControls);
+    });
+    if (present) loadUpscaler();
+});
+
+// ============================================================
+// Source crop (#225) — mirrors the native UI's Source Crop section:
+// 4 independent sides in percent or source pixels, link modes, and
+// auto-crop. Values are persisted server-side via
+// /api/v1/source/overscan (which still accepts the old x/y/locked).
+// ============================================================
+
+const CROP_SIDES = ['top', 'bottom', 'left', 'right'];
+let _crop = null; // last state from the server
+
+function cropEl(side) {
+    return document.getElementById('crop' + side.charAt(0).toUpperCase() + side.slice(1));
+}
+
+function fmtCrop(v, unit) {
+    return unit === 'px' ? Math.round(Number(v)) + ' px' : Number(v).toFixed(1) + '%';
+}
+
+function cropMax(side, data) {
+    if (data.unit !== 'px') return 45;
+    const dim = (side === 'left' || side === 'right') ? data.sourceWidth : data.sourceHeight;
+    return dim > 0 ? Math.floor(dim * 0.45) : 512;
+}
+
+function renderCrop(data) {
+    if (!data) return;
+    _crop = data;
+    const unitEl = document.getElementById('cropUnit');
+    const linkEl = document.getElementById('cropLink');
+    if (unitEl) unitEl.value = data.unit || 'percent';
+    if (linkEl) linkEl.value = data.link || 'none';
+    for (const side of CROP_SIDES) {
+        const el = cropEl(side);
+        if (!el) continue;
+        el.max = cropMax(side, data);
+        el.step = data.unit === 'px' ? 1 : 0.5;
+        el.value = data[side] ?? 0;
+        const lbl = document.getElementById(el.id + 'Value');
+        if (lbl) lbl.textContent = fmtCrop(el.value, data.unit);
+    }
+    const thr = document.getElementById('cropThreshold');
+    if (thr && data.autoCrop) {
+        thr.value = data.autoCrop.threshold;
+        document.getElementById('cropThresholdValue').textContent = data.autoCrop.threshold;
+    }
+    const status = document.getElementById('cropAutoStatus');
+    if (status && data.autoCrop) {
+        const st = data.autoCrop.state;
+        const key = 'web.config.source.crop_auto_' + st;
+        const fallback = {
+            running: 'Sampling frames...', done: 'Borders applied',
+            no_borders: 'No black borders found', no_signal: 'Picture is all black',
+        }[st] || '';
+        status.textContent = (st && st !== 'idle')
+            ? ((typeof window.t === 'function' && window.t(key) !== key) ? window.t(key) : fallback)
+            : '';
+    }
+}
+
+async function loadCrop() {
+    try {
+        renderCrop(await api.getSourceOverscan());
+    } catch (err) {
+        console.warn('Failed to load source crop:', err);
+    }
+}
+
+const _cropThrottle = { pending: null, timer: null };
+function commitCrop(fields) {
+    if (!_crop) return;
+    _cropThrottle.pending = Object.assign(_cropThrottle.pending || {}, fields);
+    if (_cropThrottle.timer) return;
+    _cropThrottle.timer = setTimeout(async () => {
+        const p = _cropThrottle.pending;
+        _cropThrottle.timer = null;
+        _cropThrottle.pending = null;
+        try {
+            const data = await api.setSourceCrop(p);
+            // Don't fight the slider being dragged: only refresh the
+            // other controls (link mirroring, unit conversion).
+            const active = document.activeElement;
+            renderCrop(data);
+            if (active && active.classList && active.classList.contains('crop-side')) active.focus();
         } catch (err) {
-            console.warn('Failed to set overscan:', err);
+            console.warn('Failed to set source crop:', err);
         }
     }, 80);
 }
 
+async function pollAutoCrop(triesLeft) {
+    await loadCrop();
+    if (_crop && _crop.autoCrop && _crop.autoCrop.state === 'running' && triesLeft > 0) {
+        setTimeout(() => pollAutoCrop(triesLeft - 1), 300);
+    }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
-    const xEl = document.getElementById('overscanX');
-    const yEl = document.getElementById('overscanY');
-    const lockEl = document.getElementById('overscanLocked');
-    if (!xEl || !yEl || !lockEl) return;
+    const unitEl = document.getElementById('cropUnit');
+    const linkEl = document.getElementById('cropLink');
+    if (!unitEl || !linkEl) return;
 
-    const onInput = (sourceAxis, value) => {
-        document.getElementById('overscan' + sourceAxis + 'Value').textContent = fmtOverscan(value);
-        if (_overscanLocked) {
-            const otherAxis = sourceAxis === 'X' ? 'Y' : 'X';
-            const otherEl = document.getElementById('overscan' + otherAxis);
-            if (otherEl) {
-                otherEl.value = value;
-                document.getElementById('overscan' + otherAxis + 'Value').textContent = fmtOverscan(value);
+    for (const side of CROP_SIDES) {
+        const el = cropEl(side);
+        if (!el) continue;
+        el.addEventListener('input', () => {
+            const unit = _crop ? _crop.unit : 'percent';
+            const v = parseFloat(el.value);
+            // Mirror linked sides locally for immediate feedback.
+            const link = linkEl.value;
+            const mirrored = link === 'all' ? CROP_SIDES
+                : link === 'pairs' ? [side, { top: 'bottom', bottom: 'top', left: 'right', right: 'left' }[side]]
+                : [side];
+            for (const s of mirrored) {
+                const o = cropEl(s);
+                if (!o) continue;
+                o.value = v;
+                const lbl = document.getElementById(o.id + 'Value');
+                if (lbl) lbl.textContent = fmtCrop(v, unit);
             }
-        }
-        commitOverscan();
-    };
+            commitCrop({ [side]: v });
+        });
+    }
+    unitEl.addEventListener('change', () => commitCrop({ unit: unitEl.value }));
+    linkEl.addEventListener('change', () => commitCrop({ link: linkEl.value }));
 
-    xEl.addEventListener('input', () => onInput('X', xEl.value));
-    yEl.addEventListener('input', () => onInput('Y', yEl.value));
-    lockEl.addEventListener('change', () => {
-        _overscanLocked = lockEl.checked;
-        if (_overscanLocked) {
-            // Lock just enabled — mirror X to Y so they start in sync.
-            yEl.value = xEl.value;
-            document.getElementById('overscanYValue').textContent = fmtOverscan(yEl.value);
-        }
-        commitOverscan();
-    });
+    const thr = document.getElementById('cropThreshold');
+    if (thr) {
+        thr.addEventListener('input', () => {
+            document.getElementById('cropThresholdValue').textContent = thr.value;
+        });
+        thr.addEventListener('change', () => commitCrop({ autoCropThreshold: parseInt(thr.value, 10) }));
+    }
+    const autoBtn = document.getElementById('cropAutoBtn');
+    if (autoBtn) {
+        autoBtn.addEventListener('click', async () => {
+            try {
+                renderCrop(await api.startSourceAutoCrop(parseInt(thr ? thr.value : '24', 10)));
+                pollAutoCrop(20);
+            } catch (err) {
+                console.warn('Failed to start auto-crop:', err);
+            }
+        });
+    }
+    const resetBtn = document.getElementById('cropResetBtn');
+    if (resetBtn) {
+        resetBtn.addEventListener('click', async () => {
+            try {
+                // Unlink first so each side really goes to 0, then restore.
+                const link = linkEl.value;
+                await api.setSourceCrop({ link: 'none', top: 0, bottom: 0, left: 0, right: 0 });
+                renderCrop(await api.setSourceCrop({ link }));
+            } catch (err) {
+                console.warn('Failed to reset source crop:', err);
+            }
+        });
+    }
 
-    loadOverscan();
+    loadCrop();
 });
 
 

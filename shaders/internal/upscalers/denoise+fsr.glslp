@@ -1,0 +1,27 @@
+# Clean + upscale: Hyllian's fast bilateral denoiser at source resolution,
+# then AMD FSR 1 (EASU to the viewport + noise-aware RCAS).
+# Denoising first keeps EASU/RCAS from sharpening capture noise.
+shaders = 3
+
+shader0 = shaders/denoise/fast-bilateral.glsl
+filter_linear0 = false
+wrap_mode0 = clamp_to_edge
+scale_type0 = source
+scale0 = 1.0
+
+shader1 = shaders/fsr/fsr-easu.glsl
+filter_linear1 = true
+wrap_mode1 = clamp_to_edge
+scale_type1 = viewport
+scale1 = 1.0
+
+shader2 = shaders/fsr/fsr-rcas.glsl
+filter_linear2 = false
+wrap_mode2 = clamp_to_edge
+scale_type2 = source
+scale2 = 1.0
+
+parameters = "SIGMA_R;FSR_SHARPENING;FSR_RCAS_DENOISE"
+SIGMA_R = 0.4
+FSR_SHARPENING = 0.3
+FSR_RCAS_DENOISE = 1.0

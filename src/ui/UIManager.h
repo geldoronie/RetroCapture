@@ -6,8 +6,15 @@
 #include <functional>
 #include <cstring>
 #include <memory>
+#include <atomic>
+#include <mutex>
 #include "../renderer/glad_loader.h"
 #include "../capture/IVideoCapture.h"
+#include "../processing/SourceCrop.h"
+#include "../osd/FpsOverlay.h"
+#include "../renderer/OutputGeometry.h"
+#include "../processing/FrameGenSettings.h"
+#include "../processing/UpscalerSettings.h"
 
 struct GLFWwindow;
 #ifdef USE_SDL2
@@ -233,6 +240,21 @@ public:
             m_onContrastChanged(contrast);
         }
     }
+    // #228 — source colour controls, applied before the shader chain.
+    // colorRange: 0 = Auto, 1 = Limited (16-235), 2 = Full (0-255).
+    void setSaturation(float saturation) { m_saturation = saturation; }
+    void setGamma(float gamma) { m_gamma = gamma; }
+    void setColorRange(int colorRange) { m_colorRange = (colorRange >= 0 && colorRange <= 2) ? colorRange : 0; }
+    // #243 — extra 16-235 -> 0-255 expansion after the decode (off = identity).
+    void setExpandLimitedAfterDecode(bool enabled) { m_expandLimitedAfterDecode = enabled; }
+    // Source downscale filter, when the logical capture size is below what
+    // the device delivers: 0 = Auto (NEAREST for whole ratios, else area
+    // average), 1 = Nearest, 2 = Area average.
+    void setSourceDownscaleFilter(int f) { m_sourceDownscaleFilter = (f >= 0 && f <= 2) ? f : 0; }
+    // #229 — deinterlacing, applied before the shader chain.
+    // mode: 0 = Off, 1 = Bob, 2 = Weave, 3 = Blend. order: 0 = Auto, 1 = TFF, 2 = BFF.
+    void setDeinterlaceMode(int mode) { m_deinterlaceMode = (mode >= 0 && mode <= 3) ? mode : 0; }
+    void setFieldOrder(int order) { m_fieldOrder = (order >= 0 && order <= 2) ? order : 0; }
     void setOnBrightnessChanged(std::function<void(float)> callback) { m_onBrightnessChanged = callback; }
     void setOnContrastChanged(std::function<void(float)> callback) { m_onContrastChanged = callback; }
 
@@ -279,6 +301,126 @@ public:
     void setOnOutputResolutionChanged(std::function<void(uint32_t, uint32_t)> callback) { m_onOutputResolutionChanged = callback; }
     uint32_t getOutputWidth() const { return m_outputWidth; }
     uint32_t getOutputHeight() const { return m_outputHeight; }
+
+    // FPS counter OSD (#226). Toggled from the Image window, F9 and the
+    // web API; persisted under config.json image.fpsOverlay. Corner:
+    // 0 = top-left, 1 = top-right, 2 = bottom-left, 3 = bottom-right.
+    bool getFpsOverlayEnabled() const { return m_fpsOverlayEnabled; }
+    int  getFpsOverlayCorner() const  { return m_fpsOverlayCorner; }
+    bool getFpsOverlayCompact() const { return m_fpsOverlayCompact; }
+    bool getFpsOverlayGraph() const   { return m_fpsOverlayGraph; }
+    void setFpsOverlayEnabled(bool enabled) { m_fpsOverlayEnabled = enabled; saveConfig(); }
+    void setFpsOverlayCorner(int corner)
+    {
+        m_fpsOverlayCorner = (corner >= 0 && corner <= 3) ? corner : 0;
+        saveConfig();
+    }
+    void setFpsOverlayCompact(bool compact) { m_fpsOverlayCompact = compact; saveConfig(); }
+    void setFpsOverlayGraph(bool graph)     { m_fpsOverlayGraph = graph; saveConfig(); }
+    // Corner <-> config/API string ("top-left", ...). Unknown -> -1.
+    static const char *fpsOverlayCornerName(int corner);
+    static int fpsOverlayCornerFromName(const std::string &name);
+    // Pipeline counters for the overlay, pushed by the render loop once
+    // per frame before render().
+    void setPerfCounters(const PerfCounters &counters)
+    {
+        if (m_fpsOverlay) m_fpsOverlay->setCounters(counters);
+    }
+    // Last 1 s window of FPS metrics; safe from any thread.
+    FpsStats getFpsStats() const { return m_fpsOverlay ? m_fpsOverlay->getStats() : FpsStats(); }
+    // #227 — output geometry (integer scaling, aspect override,
+    // rotation / mirror). Written by the UI and the web API thread, read
+    // by the render loop every frame, hence the copy-out under a lock.
+    OutputGeometry getOutputGeometry() const
+    {
+        std::lock_guard<std::mutex> lock(m_outputGeometryMutex);
+        return m_outputGeometry;
+    }
+    void setOutputGeometry(const OutputGeometry &g)
+    {
+        {
+            std::lock_guard<std::mutex> lock(m_outputGeometryMutex);
+            m_outputGeometry = g;
+            m_outputGeometry.rotation = OutputGeometry::normalizeRotation(g.rotation);
+        }
+        saveConfig();
+    }
+
+    // #247 — frame generation. Written by the UI and the web API thread,
+    // read by the render loop every frame (copy-out under a lock).
+    // persist=false applies a CLI override without rewriting config.json.
+    FrameGenSettings getFrameGenSettings() const
+    {
+        std::lock_guard<std::mutex> lock(m_frameGenMutex);
+        return m_frameGen;
+    }
+    void setFrameGenSettings(const FrameGenSettings &s, bool persist = true)
+    {
+        {
+            std::lock_guard<std::mutex> lock(m_frameGenMutex);
+            m_frameGen = s;
+            m_frameGen.mode = FrameGenSettings::clampMode(s.mode);
+            m_frameGen.method = FrameGenSettings::clampMethod(s.method);
+        }
+        if (persist) saveConfig();
+    }
+    // What the render loop reports back (UI hint / web API).
+    struct FrameGenStatus
+    {
+        bool supported = true;        // GPU can run the interpolator at all
+        bool motionSupported = true;  // ... and the motion (optical flow) method
+        bool active = false;          // generating right now
+        int effectiveMode = 0;        // FrameGenSettings::Mode in effect
+        bool remoteDriven = false;    // driven by the remote "motion" interpolation
+        float sourceFps = 0.0f;       // measured source rate (distinct frames, #256)
+        float captureFps = 0.0f;      // capture rate, repeats included (#256)
+        uint64_t repeatsSkipped = 0;  // captures skipped as repeats (#256)
+        uint64_t sceneCuts = 0;       // pairs not interpolated: scene cuts (#256)
+        uint32_t sourceWidth = 0;     // size frame generation runs at
+        uint32_t sourceHeight = 0;
+        float outputFps = 0.0f;       // output timeline rate (source x factor)
+        float addedLatencyMs = 0.0f;  // look-ahead latency it adds
+        // #248 — RIFE backend (RifeBackend::State: 0 idle, 1 loading,
+        // 2 ready, 3 unavailable).
+        bool rifeCompiled = false;
+        int rifeState = 0;
+        std::string rifeReason;      // why unavailable
+        std::string rifeDevice;      // Vulkan device in use
+        float rifeInferMs = 0.0f;    // per generated frame, on the worker
+        float rifeLatencyMs = 0.0f;  // real frame in -> first result out
+        uint64_t rifeDelivered = 0;  // frames RIFE delivered in time
+        uint64_t rifeLate = 0;       // frames that fell back to Motion
+    };
+    FrameGenStatus getFrameGenStatus() const
+    {
+        std::lock_guard<std::mutex> lock(m_frameGenMutex);
+        return m_frameGenStatus;
+    }
+    void setFrameGenStatus(const FrameGenStatus &st)
+    {
+        std::lock_guard<std::mutex> lock(m_frameGenMutex);
+        m_frameGenStatus = st;
+    }
+
+    // The render loop reports whether the upscaler stood aside this frame
+    // (target not larger than the input: nothing to upscale).
+    void setUpscalerIdle(bool idle) { m_upscalerIdle.store(idle); }
+    bool getUpscalerIdle() const { return m_upscalerIdle.load(); }
+
+    // #251 — built-in upscaler (Image window > Upscaler). Written by the UI
+    // and the web API thread, read by the render loop every frame.
+    UpscalerSettings getUpscalerSettings() const
+    {
+        std::lock_guard<std::mutex> lock(m_upscalerMutex);
+        return m_upscaler;
+    }
+    // Sets (sanitised) without saving; callers save the config.
+    void setUpscalerSettings(const UpscalerSettings &s)
+    {
+        std::lock_guard<std::mutex> lock(m_upscalerMutex);
+        m_upscaler = s;
+        m_upscaler.sanitize();
+    }
 
     // Controles V4L2
     void setCaptureControls(IVideoCapture *capture); // Genérico para V4L2 e DirectShow
@@ -725,6 +867,13 @@ public:
     // Image settings getters
     float getBrightness() const { return m_brightness; }
     float getContrast() const { return m_contrast; }
+    float getSaturation() const { return m_saturation; }
+    float getGamma() const { return m_gamma; }
+    int getColorRange() const { return m_colorRange; }
+    bool getExpandLimitedAfterDecode() const { return m_expandLimitedAfterDecode; }
+    int getSourceDownscaleFilter() const { return m_sourceDownscaleFilter; }
+    int getDeinterlaceMode() const { return m_deinterlaceMode; }
+    int getFieldOrder() const { return m_fieldOrder; }
     bool getMaintainAspect() const { return m_maintainAspect; }
     bool getFullscreen() const { return m_fullscreen; }
     int getMonitorIndex() const { return m_monitorIndex; }
@@ -781,21 +930,60 @@ public:
     // we're not a client or the host's /meta predates this field.
     uint32_t getRemoteUpstreamClientCount() const { return m_remoteState.upstreamClientCount; }
     void setRemoteUpstreamClientCount(uint32_t v) { m_remoteState.upstreamClientCount = v; }
-    float getSourceOverscanPercentX() const { return m_sourceOverscanPercentX; }
-    float getSourceOverscanPercentY() const { return m_sourceOverscanPercentY; }
-    bool getSourceOverscanLocked() const { return m_sourceOverscanLocked; }
-    void setSourceOverscanPercentX(float pct) {
-        m_sourceOverscanPercentX = pct;
-        if (m_sourceOverscanLocked) m_sourceOverscanPercentY = pct;
+    // #225 — independent 4-side source crop (see SourceCrop). Pixel values
+    // are relative to the capture texture (getCaptureTextureWidth/Height).
+    const SourceCrop &getSourceCrop() const { return m_sourceCrop; }
+    void setSourceCropSide(int side, float v) { m_sourceCrop.setSide(side, v); }
+    void setSourceCropLink(int link) { m_sourceCrop.setLink(link); }
+    void setSourceCropUnit(int unit) { m_sourceCrop.setUnit(unit, m_captureTexW, m_captureTexH); }
+    void setSourceCrop(const SourceCrop &crop) { m_sourceCrop = crop; }
+    // Legacy symmetric overscan view (pre-#225 API / config): X is the
+    // left/right crop, Y the top/bottom crop, in percent; "locked" means
+    // all four sides are linked.
+    float getSourceOverscanPercentX() const {
+        return 0.5f * (m_sourceCrop.sidePercent(SourceCrop::Left, m_captureTexW, m_captureTexH) +
+                       m_sourceCrop.sidePercent(SourceCrop::Right, m_captureTexW, m_captureTexH));
     }
-    void setSourceOverscanPercentY(float pct) {
-        m_sourceOverscanPercentY = pct;
-        if (m_sourceOverscanLocked) m_sourceOverscanPercentX = pct;
+    float getSourceOverscanPercentY() const {
+        return 0.5f * (m_sourceCrop.sidePercent(SourceCrop::Top, m_captureTexW, m_captureTexH) +
+                       m_sourceCrop.sidePercent(SourceCrop::Bottom, m_captureTexW, m_captureTexH));
     }
+    bool getSourceOverscanLocked() const { return m_sourceCrop.link == SourceCrop::LinkAll; }
+    void setSourceOverscanPercentX(float pct) { setLegacyOverscanAxis(true, pct); }
+    void setSourceOverscanPercentY(float pct) { setLegacyOverscanAxis(false, pct); }
     void setSourceOverscanLocked(bool locked) {
-        m_sourceOverscanLocked = locked;
-        if (locked) m_sourceOverscanPercentY = m_sourceOverscanPercentX;
+        m_sourceCrop.setLink(locked ? SourceCrop::LinkAll : SourceCrop::LinkPairs);
     }
+
+    // #225 — auto-crop: the request is taken by the render pipeline, which
+    // samples a few frames, detects the black borders and calls
+    // applySourceAutoCrop(). Safe to call from the web API thread.
+    enum class AutoCropState { Idle = 0, Running = 1, Done = 2, NoBorders = 3, NoSignal = 4 };
+    void requestSourceAutoCrop(int threshold) {
+        if (threshold < 0) threshold = 0;
+        if (threshold > 128) threshold = 128;
+        m_autoCropRequest.store(threshold);
+        m_autoCropState.store(static_cast<int>(AutoCropState::Running));
+    }
+    bool takeSourceAutoCropRequest(int &threshold) {
+        const int t = m_autoCropRequest.exchange(-1);
+        if (t < 0) return false;
+        threshold = t;
+        return true;
+    }
+    AutoCropState getSourceAutoCropState() const {
+        return static_cast<AutoCropState>(m_autoCropState.load());
+    }
+    // Apply detected borders (source pixels on a srcW x srcH frame), in
+    // the current unit; drops the link mode when the borders aren't
+    // symmetric so the detected values survive. found=false reports a
+    // dark frame (no signal) and leaves the crop untouched.
+    void applySourceAutoCrop(bool found, uint32_t top, uint32_t bottom,
+                             uint32_t left, uint32_t right,
+                             uint32_t srcW, uint32_t srcH);
+    int getSourceAutoCropThreshold() const { return m_autoCropThreshold; }
+    void setSourceAutoCropThreshold(int t) { m_autoCropThreshold = t; }
+
     uint32_t getCaptureFps() const { return m_captureFps; }
     std::string getCaptureDevice() const { return m_captureDevice; }
     IVideoCapture *getCapture() const { return m_capture; }
@@ -1209,6 +1397,8 @@ private:
     // ChatClient (held by Application; pointer wired via
     // setChatClient).
     std::unique_ptr<class OSDChat>                  m_chatOverlay;
+    // FPS counter OSD (#226).
+    std::unique_ptr<FpsOverlay>                     m_fpsOverlay;
     class ChatClient                               *m_chatClient = nullptr;
     // Loaded from config.json before m_quickActionsOverlay exists,
     // applied via setVisible() right after construction. Defaults to
@@ -1259,12 +1449,27 @@ private:
     // Brightness/Contrast
     float m_brightness = 1.0f;
     float m_contrast = 1.0f;
+    // #228 — source colour controls (identity defaults)
+    float m_saturation = 1.0f;
+    float m_gamma = 1.0f;
+    int m_colorRange = 0;
+    bool m_expandLimitedAfterDecode = false; // #243
+    int m_sourceDownscaleFilter = 0;          // Auto
+    // #229 — deinterlacing (Off by default)
+    int m_deinterlaceMode = 0;
+    int m_fieldOrder = 0;
     std::function<void(float)> m_onBrightnessChanged;
     std::function<void(float)> m_onContrastChanged;
 
     // Aspect ratio
     bool m_maintainAspect = false;
     std::function<void(bool)> m_onMaintainAspectChanged;
+
+    // FPS counter overlay (#226). Off by default.
+    bool m_fpsOverlayEnabled = false;
+    int  m_fpsOverlayCorner  = 0;
+    bool m_fpsOverlayCompact = false;
+    bool m_fpsOverlayGraph   = true;
 
     // Fullscreen
     bool m_fullscreen = false;
@@ -1276,6 +1481,19 @@ private:
     uint32_t m_outputWidth = 0;
     uint32_t m_outputHeight = 0;
     std::function<void(uint32_t, uint32_t)> m_onOutputResolutionChanged;
+
+    // #227 — see getOutputGeometry().
+    OutputGeometry m_outputGeometry;
+    mutable std::mutex m_outputGeometryMutex;
+    // #251 — see getUpscalerSettings().
+    UpscalerSettings m_upscaler;
+    std::atomic<bool> m_upscalerIdle{false};
+    mutable std::mutex m_upscalerMutex;
+
+    // #247 — see getFrameGenSettings().
+    FrameGenSettings m_frameGen;
+    FrameGenStatus m_frameGenStatus;
+    mutable std::mutex m_frameGenMutex;
 
     // V4L2 Controls
     IVideoCapture *m_capture = nullptr;
@@ -1320,11 +1538,13 @@ private:
     // Connection-overlay frame-to-frame tracking. We detect
     // Connection-overlay transition tracking moved to
     // osd::ConnectionStatusOverlay during the OSD layer pass (#68).
-    // Overscan: crop % das bordas do source antes do downscale.
-    // X horizontal, Y vertical. Locked espelha um no outro.
-    float m_sourceOverscanPercentX = 0.0f;
-    float m_sourceOverscanPercentY = 0.0f;
-    bool m_sourceOverscanLocked = true;
+    // #225 — source crop per side (replaces the symmetric X/Y overscan;
+    // old configs are migrated in loadConfig).
+    SourceCrop m_sourceCrop;
+    void setLegacyOverscanAxis(bool horizontal, float pct);
+    std::atomic<int> m_autoCropRequest{-1};
+    std::atomic<int> m_autoCropState{0};
+    int m_autoCropThreshold = 24;
     std::string m_captureDevice;
     std::function<void(uint32_t, uint32_t)> m_onResolutionChanged;
     std::function<void(uint32_t)> m_onFramerateChanged;

@@ -179,6 +179,9 @@ private:
     bool handleGETPresets(int clientFd);
     bool handleGETPreset(int clientFd, const std::string& presetName);
     bool handleGETSourceOverscan(int clientFd);
+    bool handleGETSourceDeinterlace(int clientFd);                        // #229
+    bool handleGETFrameGeneration(int clientFd);                          // #247
+    bool handleSetFrameGeneration(int clientFd, const std::string& body); // #247
     /**
      * GET /api/v1/preferences — exposes the host application's current
      * UI language so the portal can default to it on first load.
@@ -188,6 +191,11 @@ private:
      */
     bool handleGETPreferences(int clientFd);
     bool handleSetSourceOverscan(int clientFd, const std::string& body);
+    // #225 — POST /api/v1/source/overscan/auto: start black-border detection.
+    bool handleSourceAutoCrop(int clientFd, const std::string& body);
+    // #225 — the source crop as JSON (4 sides + legacy x/y/locked).
+    std::string sourceCropJSON() const;
+    bool handleSetSourceDeinterlace(int clientFd, const std::string& body); // #229
     bool handleGETAudioInputSources(int clientFd);
     bool handleGETAudioStatus(int clientFd);
 #ifdef __APPLE__
@@ -218,6 +226,7 @@ private:
     bool handleSetCaptureResolution(int clientFd, const std::string &body);
     bool handleSetCaptureFPS(int clientFd, const std::string &body);
     bool handleSetImageSettings(int clientFd, const std::string &body);
+    bool handleGETFpsStats(int clientFd); // #226
     bool handleSetStreamingSettings(int clientFd, const std::string &body);
     bool handleSetStreamingControl(int clientFd, const std::string &body);
     bool handleSetRecordingSettings(int clientFd, const std::string &body);

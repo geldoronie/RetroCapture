@@ -22,6 +22,31 @@
  * flashes white for the first 100 ms of every whole MediaClock second —
  * the same instants AudioCaptureTestTone beeps — so the output's A/V
  * offset can be measured from the flash/beep onsets.
+ *
+ * RETROCAPTURE_TEST_NATIVE=WxH makes the source deliver that size whatever
+ * is asked (like a grabber that lacks the requested mode), to exercise the
+ * pipeline's logical-size downscale.
+ *
+ * RETROCAPTURE_TEST_PATTERN selects an alternative layout for image-path
+ * tests (default: the bars above):
+ *  - "levels" (#228): top half = 8 grey steps (0,16,32,64,128,192,235,255),
+ *    bottom half = the colour bars. Measures range/saturation/gamma.
+ *  - "interlaced" (#229): synthetic woven interlaced frames, top field
+ *    first. A white bar moves 16 px per FIELD on black: even rows hold the
+ *    bar at field time 2f, odd rows at 2f+1, so motion combs exactly like a
+ *    480i/576i capture. Measures deinterlacing.
+ *  - "motion" (#247): game-like moving content for frame generation — a
+ *    textured background scrolling 240 px/s with parallax, three sprites
+ *    on curved paths, a static HUD bar with a counter that changes twice a
+ *    second, plus the sync flash band. Positions are a pure function of
+ *    the frame timestamp (see renderMotion), so any instant can be
+ *    rendered exactly: frame generation is measured against it.
+ *    RETROCAPTURE_TEST_GAME_FPS=N (#256) draws a new picture only N times a
+ *    second, the captures in between repeat it (a 30 fps game on 60 Hz).
+ *  - "edges" (#251): a static, hard-edged pattern defined in normalised
+ *    coordinates (concentric rings, a rotated checkerboard, a colour
+ *    starburst), so the same pattern rendered at a higher --width/--height
+ *    is the ground truth of an upscale. Measures upscalers.
  */
 class VideoCaptureTestPattern : public IVideoCapture
 {
@@ -52,8 +77,31 @@ public:
     uint32_t getHeight() const override { return m_height; }
     uint32_t getPixelFormat() const override { return 0; } // RGB24
 
+    /**
+     * #247 — the "motion" picture at time tSec (RGB24, w*h*3 bytes). The
+     * sync band at the bottom flashes when `flash` is set. Static so the
+     * frame-generation bench renders the exact same content offline.
+     */
+    static void renderMotion(uint8_t *rgb, uint32_t w, uint32_t h, double tSec, bool flash);
+
 private:
     void renderPattern(uint64_t frameIndex, int64_t timestampUs);
+    void renderLevels();
+    void renderEdges();
+
+public:
+    /** #251 — the "edges" picture at w x h (RGB24, w*h*3 bytes): the ground
+     *  truth of an upscale of a smaller render (used by --upscaler-bench). */
+    static void renderEdgesTo(uint8_t *rgb, uint32_t w, uint32_t h);
+
+private:
+    void renderInterlaced(uint64_t frameIndex);
+
+    enum class Variant { Bars, Levels, Interlaced, Motion, Edges };
+    Variant m_variant = Variant::Bars;
+    double m_pauseRun = 0.0, m_pauseStill = 0.0; // #256: RETROCAPTURE_TEST_PAUSE
+    double m_cutPeriod = 0.0; // #256: RETROCAPTURE_TEST_CUT (seconds)
+    double m_gameFps = 0.0; // #256: RETROCAPTURE_TEST_GAME_FPS (0 = every frame new)
 
     uint32_t m_width = 1280;
     uint32_t m_height = 720;

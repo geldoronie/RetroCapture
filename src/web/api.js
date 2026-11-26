@@ -88,6 +88,33 @@ class RetroCaptureAPI {
         return await this.request('POST', '/source/overscan', { x, y, locked });
     }
 
+    // #225 — 4-side crop: any of top/bottom/left/right/unit/link.
+    async setSourceCrop(fields) {
+        return await this.request('POST', '/source/overscan', fields);
+    }
+
+    async startSourceAutoCrop(threshold) {
+        return await this.request('POST', '/source/overscan/auto', { threshold });
+    }
+
+    // #229 — deinterlacing
+    async getSourceDeinterlace() {
+        return await this.request('GET', '/source/deinterlace');
+    }
+
+    async setSourceDeinterlace(mode, fieldOrder) {
+        return await this.request('POST', '/source/deinterlace', { mode, fieldOrder });
+    }
+
+    // #247 — frame generation
+    async getFrameGeneration() {
+        return await this.request('GET', '/frame-generation');
+    }
+
+    async setFrameGeneration(settings) {
+        return await this.request('POST', '/frame-generation', settings);
+    }
+
     async getImageSettings() {
         return await this.request('GET', '/image/settings');
     }

@@ -21,8 +21,12 @@ private:
     UIManager *m_uiManager = nullptr;
 
     void renderBrightnessContrast();
+    void renderSourceColor();
+    void renderUpscaler(); // #251
     void renderAspectRatio();
     void renderFullscreen();
     void renderMonitorSelection();
     void renderOutputResolution();
+    void renderFpsOverlay();
+    void renderFrameGeneration(); // #247
 };

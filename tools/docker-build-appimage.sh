@@ -83,12 +83,25 @@ if [ -d "/work/shaders/shaders_glsl" ]; then
 else
     echo "⚠️  Aviso: Diretório /work/shaders/shaders_glsl não encontrado"
 fi
+# #251 — built-in upscaler passes (shaders/internal/upscalers); the app finds
+# them next to RETROCAPTURE_SHADER_PATH (.../shaders/internal).
+if [ -d "/work/shaders/internal" ]; then
+    cp -r /work/shaders/internal "$APP_DIR/usr/share/retrocapture/shaders/"
+    echo "✅ Internal shaders copied"
+else
+    echo "⚠️  Warning: /work/shaders/internal not found (built-in upscaler unavailable)"
+fi
 
 # Copiar assets
 echo "📋 Copiando assets..."
 if [ -d "/work/assets" ]; then
     cp -r /work/assets/* "$APP_DIR/usr/share/retrocapture/assets/" 2>/dev/null || true
     echo "✅ Assets copiados"
+    # #248 — RIFE model (downloaded by CMake into the build output)
+    if [ -d "/work/build-linux-x86_64/bin/assets/models" ]; then
+        cp -r /work/build-linux-x86_64/bin/assets/models "$APP_DIR/usr/share/retrocapture/assets/"
+        echo "✅ RIFE model copied"
+    fi
 else
     echo "⚠️  Aviso: Diretório /work/assets não encontrado"
 fi

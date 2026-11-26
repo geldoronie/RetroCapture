@@ -3,7 +3,9 @@
 #include "../capture/IVideoCapture.h"
 #include "../renderer/OpenGLRenderer.h"
 #include "../utils/Logger.h"
+#include <algorithm>
 #include <iostream>
+#include <thread>
 
 // Core GL since 1.2; define defensively in case the active loader header
 // didn't expose it (used by the screen-capture 32-bit upload path).
@@ -29,11 +31,15 @@ FrameProcessor::FrameProcessor()
 FrameProcessor::~FrameProcessor()
 {
     deleteTexture();
-    if (m_swsContext)
-    {
-        sws_freeContext(m_swsContext);
-        m_swsContext = nullptr;
-    }
+    m_prePass.destroy();
+    freeSwsSlices();
+}
+
+void FrameProcessor::freeSwsSlices()
+{
+    for (SwsSlice &s : m_swsSlices)
+        if (s.ctx) sws_freeContext(s.ctx);
+    m_swsSlices.clear();
 }
 
 void FrameProcessor::init(OpenGLRenderer *renderer)
@@ -56,6 +62,9 @@ bool FrameProcessor::processFrame(IVideoCapture *capture)
         return false; // Device is closed, cannot process frames
     }
 
+    m_reportedColorRange = capture->getReportedColorRange();
+    m_reportedFieldOrder = capture->getReportedFieldOrder();
+
     // #107 zero-copy GPU path: if the capture hands us a ready GL texture
     // (DMABUF imported via EGL), use it directly and skip the CPU upload.
     {
@@ -70,6 +79,9 @@ bool FrameProcessor::processFrame(IVideoCapture *capture)
             // The zero-copy path has no per-frame signal: date it now.
             ++m_frameSeq;
             m_frameTimestampUs = MediaClock::nowUs();
+            m_lastFrameWasYUV = false;
+            beginFrameFields(m_frameTimestampUs);
+            runPrePass();
             return true;
         }
         m_externalTexture = 0; // not on the GPU path this frame
@@ -82,6 +94,19 @@ bool FrameProcessor::processFrame(IVideoCapture *capture)
     // Log de depuração para dummy mode
     if (!captured)
     {
+        // #229 — bob: present the second field of the last frame once its
+        // time has come (half a frame period after the first).
+        if (emitSecondFieldIfDue())
+        {
+            return true;
+        }
+        // #228 — adjustments changed while the source is idle (paused or
+        // static screen): re-run the pass on the last uploaded frame so the
+        // change shows without waiting for the next one.
+        if (m_adjustDirty && m_hasValidFrame)
+        {
+            runPrePass();
+        }
         return false; // Nenhum frame novo disponível
     }
 
@@ -97,6 +122,7 @@ bool FrameProcessor::processFrame(IVideoCapture *capture)
     // #198 — a new captured frame: remember when it was captured.
     ++m_frameSeq;
     m_frameTimestampUs = frame.timestampUs > 0 ? frame.timestampUs : MediaClock::nowUs();
+    beginFrameFields(m_frameTimestampUs);
 
     // Se a textura ainda não foi criada ou o tamanho mudou
     bool textureCreated = false;
@@ -173,6 +199,7 @@ bool FrameProcessor::processFrame(IVideoCapture *capture)
             m_rgbBuffer.resize(requiredSize);
         }
         convertYUYVtoRGB(frame.data, m_rgbBuffer.data(), frame.width, frame.height);
+        m_lastFrameWasYUV = true;
 
         if (textureCreated)
         {
@@ -187,6 +214,7 @@ bool FrameProcessor::processFrame(IVideoCapture *capture)
     }
     else if (frame.size == frame.width * frame.height * 3)
     {
+        m_lastFrameWasYUV = false;
         // RGB24: usar diretamente
         if (textureCreated)
         {
@@ -204,6 +232,7 @@ bool FrameProcessor::processFrame(IVideoCapture *capture)
         // matching source format and let the driver swizzle into the RGB
         // texture — no CPU colour conversion, which is what keeps a full
         // monitor / 4K grab at the compositor's frame rate.
+        m_lastFrameWasYUV = false;
         const GLenum srcFmt = (frame.format == RC_PIXFMT_RGBA) ? GL_RGBA : GL_BGRA;
         if (textureCreated)
             glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, frame.width, frame.height, 0,
@@ -215,6 +244,7 @@ bool FrameProcessor::processFrame(IVideoCapture *capture)
     else
     {
         // Outros formatos: usar renderer (pode ter conversão específica)
+        m_lastFrameWasYUV = false;
         if (textureCreated)
         {
             m_renderer->updateTexture(m_texture, frame.data, frame.width, frame.height, frame.format);
@@ -226,7 +256,163 @@ bool FrameProcessor::processFrame(IVideoCapture *capture)
     }
 
     m_hasValidFrame = true;
+    runPrePass();
     return true; // Frame processado com sucesso
+}
+
+void FrameProcessor::setSourceAdjustments(const SourceAdjustments &adj)
+{
+    if (adj.colorRange == m_adjust.colorRange &&
+        adj.saturation == m_adjust.saturation &&
+        adj.gamma == m_adjust.gamma &&
+        adj.deinterlace == m_adjust.deinterlace &&
+        adj.fieldOrder == m_adjust.fieldOrder &&
+        adj.expandAfterDecode == m_adjust.expandAfterDecode)
+    {
+        return;
+    }
+    if (adj.expandAfterDecode != m_adjust.expandAfterDecode)
+    {
+        LOG_INFO(std::string("Expand limited range after decode: ") +
+                 (adj.expandAfterDecode ? "on" : "off"));
+    }
+    if (adj.deinterlace != m_adjust.deinterlace || adj.fieldOrder != m_adjust.fieldOrder)
+    {
+        static const char *kModes[] = {"off", "bob", "weave", "blend"};
+        static const char *kOrders[] = {"auto", "tff", "bff"};
+        const int m = static_cast<int>(adj.deinterlace);
+        const int o = static_cast<int>(adj.fieldOrder);
+        LOG_INFO(std::string("Deinterlace: ") + (m >= 0 && m <= 3 ? kModes[m] : "?") +
+                 ", field order " + (o >= 0 && o <= 2 ? kOrders[o] : "?"));
+        m_secondFieldPending = false;
+    }
+    m_adjust = adj;
+    m_adjustDirty = true;
+}
+
+int FrameProcessor::firstField() const
+{
+    switch (m_adjust.fieldOrder)
+    {
+    case FieldOrder::TopFirst:
+        return 0;
+    case FieldOrder::BottomFirst:
+        return 1;
+    case FieldOrder::Auto:
+    default:
+        // Backend hint, else top field first (the common case).
+        return m_reportedFieldOrder == 2 ? 1 : 0;
+    }
+}
+
+void FrameProcessor::beginFrameFields(int64_t frameTsUs)
+{
+    // Source frame period from consecutive capture timestamps (EMA), used
+    // to place bob's second field halfway to the next frame.
+    if (m_lastFrameTsUs > 0)
+    {
+        const int64_t d = frameTsUs - m_lastFrameTsUs;
+        if (d >= 5000 && d <= 200000)
+            m_framePeriodUs = m_framePeriodUs > 0 ? (m_framePeriodUs * 7 + d) / 8 : d;
+    }
+    m_lastFrameTsUs = frameTsUs;
+
+    if (m_secondFieldPending)
+    {
+        // The next frame arrived before the second field was shown (the
+        // loop ran late): drop it rather than show it late.
+        ++m_droppedSecondFields;
+        if (m_droppedSecondFields == 1 || m_droppedSecondFields % 600 == 0)
+            LOG_INFO("Deinterlace (bob): dropped second fields so far: " +
+                     std::to_string(m_droppedSecondFields));
+    }
+
+    m_currentField = firstField();
+    m_secondFieldPending = (m_adjust.deinterlace == DeinterlaceMode::Bob);
+    if (m_secondFieldPending)
+    {
+        const int64_t half = (m_framePeriodUs > 0 ? m_framePeriodUs : 33367) / 2;
+        // Present it from 3/4 of a field after the first one: a main loop
+        // paced at 2x the source rate (e.g. 60 Hz for 30 fps) then always
+        // has an iteration inside the window despite a few ms of jitter,
+        // instead of missing it and dropping the field when the next frame
+        // lands first. The timestamp stays at the exact half period.
+        m_secondFieldDueUs = MediaClock::nowUs() + (half * 3) / 4;
+        m_secondFieldTsUs = frameTsUs + half;
+    }
+}
+
+bool FrameProcessor::emitSecondFieldIfDue()
+{
+    if (!m_secondFieldPending || !m_hasValidFrame ||
+        m_adjust.deinterlace != DeinterlaceMode::Bob)
+    {
+        return false;
+    }
+    if (MediaClock::nowUs() < m_secondFieldDueUs)
+    {
+        return false;
+    }
+    m_secondFieldPending = false;
+    m_currentField = 1 - firstField();
+    ++m_frameSeq;
+    m_frameTimestampUs = m_secondFieldTsUs;
+    runPrePass();
+    return true;
+}
+
+bool FrameProcessor::wantYUVFullRange() const
+{
+    switch (m_adjust.colorRange)
+    {
+    case SourceColorRange::Full:
+        return true;
+    case SourceColorRange::Limited:
+        return false;
+    case SourceColorRange::Auto:
+    default:
+        // Historical behaviour: Y'CbCr is limited range unless the driver
+        // explicitly says otherwise.
+        return m_reportedColorRange == 2;
+    }
+}
+
+void FrameProcessor::runPrePass()
+{
+    m_adjustDirty = false;
+
+    SourcePrePass::Params p;
+    p.saturation = m_adjust.saturation;
+    p.gamma = m_adjust.gamma;
+    // #229 — Weave (and Off) leave the woven frame as is.
+    if (m_adjust.deinterlace == DeinterlaceMode::Bob)
+    {
+        p.deinterlace = 1;
+        p.field = m_currentField;
+    }
+    else if (m_adjust.deinterlace == DeinterlaceMode::Blend)
+    {
+        p.deinterlace = 2;
+    }
+    // Y'CbCr frames get their range in the YUV->RGB decode (libswscale);
+    // RGB frames are expanded here when the source is limited range.
+    if (!m_lastFrameWasYUV)
+    {
+        p.expandLimitedRange =
+            m_adjust.colorRange == SourceColorRange::Limited ||
+            (m_adjust.colorRange == SourceColorRange::Auto && m_reportedColorRange == 1);
+    }
+    // #243 — independent of colorRange and of the frame format.
+    p.expandAfterDecode = m_adjust.expandAfterDecode;
+
+    if (!SourcePrePass::isActive(p))
+    {
+        m_processedTexture = 0; // identity: hand out the uploaded texture
+        return;
+    }
+
+    const GLuint src = m_externalTexture ? m_externalTexture : m_texture;
+    m_processedTexture = m_prePass.apply(src, m_textureWidth, m_textureHeight, p);
 }
 
 void FrameProcessor::deleteTexture()
@@ -239,11 +425,16 @@ void FrameProcessor::deleteTexture()
         m_textureHeight = 0;
         m_hasValidFrame = false;
     }
+    m_processedTexture = 0;
+    m_secondFieldPending = false;
+    m_lastFrameTsUs = 0;
+    m_framePeriodUs = 0;
 }
 
 void FrameProcessor::setTextureFilterLinear(bool linear)
 {
     m_textureFilterLinear = linear;
+    m_prePass.setFilterLinear(linear);
     // Atualizar textura existente se houver
     if (m_texture != 0)
     {
@@ -262,32 +453,74 @@ void FrameProcessor::convertYUYVtoRGB(const uint8_t *yuyv, uint8_t *rgb, uint32_
         return;
     }
 
-    if (!m_swsContext || m_swsWidth != static_cast<int>(width) || m_swsHeight != static_cast<int>(height))
+    if (m_swsSlices.empty() || m_swsWidth != static_cast<int>(width) || m_swsHeight != static_cast<int>(height))
     {
-        if (m_swsContext)
+        freeSwsSlices();
+        // Up to 4 slices (one per spare core), each at least 64 rows.
+        const unsigned hw = std::thread::hardware_concurrency();
+        int n = static_cast<int>(std::min<unsigned>(4u, hw > 1 ? hw - 1 : 1u));
+        while (n > 1 && static_cast<int>(height) / n < 64) --n;
+        const int base = static_cast<int>(height) / n, extra = static_cast<int>(height) % n;
+        int y = 0;
+        for (int i = 0; i < n; ++i)
         {
-            sws_freeContext(m_swsContext);
-            m_swsContext = nullptr;
-        }
-        m_swsContext = sws_getContext(
-            static_cast<int>(width), static_cast<int>(height), AV_PIX_FMT_YUYV422,
-            static_cast<int>(width), static_cast<int>(height), AV_PIX_FMT_RGB24,
-            SWS_POINT, nullptr, nullptr, nullptr);
-        if (!m_swsContext)
-        {
-            LOG_ERROR("sws_getContext falhou para YUYV→RGB " +
-                      std::to_string(width) + "x" + std::to_string(height));
-            return;
+            SwsSlice sl;
+            sl.y0 = y;
+            sl.h = base + (i < extra ? 1 : 0);
+            sl.ctx = sws_getContext(static_cast<int>(width), sl.h, AV_PIX_FMT_YUYV422,
+                                    static_cast<int>(width), sl.h, AV_PIX_FMT_RGB24,
+                                    SWS_POINT, nullptr, nullptr, nullptr);
+            if (!sl.ctx)
+            {
+                LOG_ERROR("sws_getContext falhou para YUYV→RGB " +
+                          std::to_string(width) + "x" + std::to_string(sl.h));
+                freeSwsSlices();
+                return;
+            }
+            m_swsSlices.push_back(sl);
+            y += sl.h;
         }
         m_swsWidth = static_cast<int>(width);
         m_swsHeight = static_cast<int>(height);
+        m_swsFullRange = false; // libswscale's default for YUYV input
+        LOG_INFO("YUYV->RGB: " + std::to_string(width) + "x" + std::to_string(height) + " in " +
+                 std::to_string(n) + " parallel slice(s)");
     }
 
-    const uint8_t *srcSlice[1] = { yuyv };
-    int srcStride[1] = { static_cast<int>(width) * 2 };
-    uint8_t *dstSlice[1] = { rgb };
-    int dstStride[1] = { static_cast<int>(width) * 3 };
+    // #228 — source range of the Y'CbCr input. Only touch the contexts when
+    // it differs from what they decode now, so the default stays bit-exact.
+    const bool fullRange = wantYUVFullRange();
+    if (fullRange != m_swsFullRange)
+    {
+        for (SwsSlice &sl : m_swsSlices)
+        {
+            int *invTable = nullptr, *table = nullptr;
+            int srcRange = 0, dstRange = 0, brightness = 0, contrast = 0, saturation = 0;
+            if (sws_getColorspaceDetails(sl.ctx, &invTable, &srcRange, &table, &dstRange,
+                                         &brightness, &contrast, &saturation) >= 0)
+            {
+                sws_setColorspaceDetails(sl.ctx, invTable, fullRange ? 1 : 0, table, dstRange,
+                                         brightness, contrast, saturation);
+            }
+        }
+        LOG_INFO(std::string("YUV decode range: ") + (fullRange ? "full (0-255)" : "limited (16-235)"));
+        m_swsFullRange = fullRange;
+    }
 
-    sws_scale(m_swsContext, srcSlice, srcStride, 0, static_cast<int>(height), dstSlice, dstStride);
+    auto convertSlice = [&](const SwsSlice &sl) {
+        const uint8_t *srcSlice[1] = {yuyv + static_cast<size_t>(sl.y0) * width * 2};
+        int srcStride[1] = {static_cast<int>(width) * 2};
+        uint8_t *dstSlice[1] = {rgb + static_cast<size_t>(sl.y0) * width * 3};
+        int dstStride[1] = {static_cast<int>(width) * 3};
+        sws_scale(sl.ctx, srcSlice, srcStride, 0, sl.h, dstSlice, dstStride);
+    };
+    // Slice 0 on this thread, the others on short-lived workers.
+    std::vector<std::thread> workers;
+    workers.reserve(m_swsSlices.size() > 1 ? m_swsSlices.size() - 1 : 0);
+    for (size_t i = 1; i < m_swsSlices.size(); ++i)
+        workers.emplace_back(convertSlice, std::cref(m_swsSlices[i]));
+    convertSlice(m_swsSlices[0]);
+    for (std::thread &t : workers)
+        t.join();
 }
 

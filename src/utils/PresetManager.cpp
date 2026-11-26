@@ -189,10 +189,30 @@ bool PresetManager::savePreset(const std::string& name, const PresetData& data)
             presetJson["capture"]["sourceType"] = data.sourceType;
         }
 
+        // Source crop (#225)
+        if (data.hasSourceCrop)
+        {
+            presetJson["sourceCrop"] = {
+                {"top", data.sourceCrop.value[SourceCrop::Top]},
+                {"bottom", data.sourceCrop.value[SourceCrop::Bottom]},
+                {"left", data.sourceCrop.value[SourceCrop::Left]},
+                {"right", data.sourceCrop.value[SourceCrop::Right]},
+                {"unit", SourceCrop::unitName(data.sourceCrop.unit)},
+                {"link", SourceCrop::linkName(data.sourceCrop.link)}};
+        }
+
         // Image settings
         // Note: fullscreen and monitorIndex are NOT saved - they vary per user/system
         presetJson["image"]["brightness"] = data.imageBrightness;
         presetJson["image"]["contrast"] = data.imageContrast;
+        presetJson["image"]["saturation"] = data.imageSaturation;
+        presetJson["image"]["gamma"] = data.imageGamma;
+        presetJson["image"]["colorRange"] = data.imageColorRange;
+        presetJson["image"]["expandLimitedAfterDecode"] = data.imageExpandLimitedAfterDecode;
+        presetJson["image"]["downscaleFilter"] = data.imageDownscaleFilter;
+        presetJson["image"]["upscaler"] = data.upscaler.toJson(); // #251
+        presetJson["deinterlace"]["mode"] = data.deinterlaceMode;
+        presetJson["deinterlace"]["fieldOrder"] = data.fieldOrder;
         presetJson["image"]["maintainAspect"] = data.maintainAspect;
         // fullscreen is NOT saved - varies per user preference
         // monitorIndex is NOT saved - varies per system
@@ -356,6 +376,33 @@ bool PresetManager::loadPreset(const std::string& name, PresetData& data)
             }
         }
 
+        // Load source crop (#225)
+        if (presetJson.contains("sourceCrop") && presetJson["sourceCrop"].is_object())
+        {
+            const auto &c = presetJson["sourceCrop"];
+            data.sourceCrop.value[SourceCrop::Top] = c.value("top", 0.0f);
+            data.sourceCrop.value[SourceCrop::Bottom] = c.value("bottom", 0.0f);
+            data.sourceCrop.value[SourceCrop::Left] = c.value("left", 0.0f);
+            data.sourceCrop.value[SourceCrop::Right] = c.value("right", 0.0f);
+            data.sourceCrop.unit = SourceCrop::unitFromName(c.value("unit", std::string("percent")).c_str(), SourceCrop::Percent);
+            data.sourceCrop.link = SourceCrop::linkFromName(c.value("link", std::string("none")).c_str(), SourceCrop::LinkNone);
+            data.hasSourceCrop = true;
+        }
+
+        // #229 — deinterlacing
+        if (presetJson.contains("deinterlace"))
+        {
+            const auto& deint = presetJson["deinterlace"];
+            if (deint.contains("mode"))
+            {
+                data.deinterlaceMode = deint["mode"].get<int>();
+            }
+            if (deint.contains("fieldOrder"))
+            {
+                data.fieldOrder = deint["fieldOrder"].get<int>();
+            }
+        }
+
         // Load image settings
         if (presetJson.contains("image"))
         {
@@ -367,6 +414,30 @@ bool PresetManager::loadPreset(const std::string& name, PresetData& data)
             if (image.contains("contrast"))
             {
                 data.imageContrast = image["contrast"].get<float>();
+            }
+            if (image.contains("saturation"))
+            {
+                data.imageSaturation = image["saturation"].get<float>();
+            }
+            if (image.contains("gamma"))
+            {
+                data.imageGamma = image["gamma"].get<float>();
+            }
+            if (image.contains("colorRange"))
+            {
+                data.imageColorRange = image["colorRange"].get<int>();
+            }
+            if (image.contains("expandLimitedAfterDecode"))
+            {
+                data.imageExpandLimitedAfterDecode = image["expandLimitedAfterDecode"].get<bool>();
+            }
+            if (image.contains("downscaleFilter") && image["downscaleFilter"].is_number_integer())
+            {
+                data.imageDownscaleFilter = image["downscaleFilter"].get<int>();
+            }
+            if (image.contains("upscaler") && image["upscaler"].is_object())
+            {
+                data.upscaler.applyJson(image["upscaler"]); // #251
             }
             if (image.contains("maintainAspect"))
             {

@@ -202,28 +202,50 @@
                                             <small class="form-text text-muted mt-1" data-i18n="web.config.source.auto_apply_hint">Changes are applied automatically on selection.</small>
                                         </div>
 
-                                        <!-- Source Overscan -->
+                                        <!-- Source Crop (#225: 4 sides, % or px, link modes, auto-crop) -->
                                         <div class="col-12">
                                             <div class="card">
                                                 <div class="card-body">
-                                                    <div class="d-flex justify-content-between align-items-baseline mb-2">
-                                                        <h6 class="card-title mb-0"><i class="bi bi-aspect-ratio me-1"></i><span data-i18n="web.config.source.overscan">Source overscan</span></h6>
-                                                        <div class="form-check form-switch">
-                                                            <input class="form-check-input" type="checkbox" id="overscanLocked">
-                                                            <label class="form-check-label small" for="overscanLocked" data-i18n="web.config.source.lock_xy">Lock X / Y</label>
+                                                    <div class="d-flex flex-wrap justify-content-between align-items-baseline gap-2 mb-2">
+                                                        <h6 class="card-title mb-0"><i class="bi bi-aspect-ratio me-1"></i><span data-i18n="web.config.source.overscan">Source crop</span></h6>
+                                                        <div class="d-flex flex-wrap gap-2">
+                                                            <select class="form-select form-select-sm w-auto" id="cropUnit">
+                                                                <option value="percent" data-i18n="web.config.source.crop_unit_percent">%</option>
+                                                                <option value="px" data-i18n="web.config.source.crop_unit_px">px</option>
+                                                            </select>
+                                                            <select class="form-select form-select-sm w-auto" id="cropLink">
+                                                                <option value="none" data-i18n="web.config.source.crop_link_none">Independent sides</option>
+                                                                <option value="pairs" data-i18n="web.config.source.crop_link_pairs">Lock left/right + top/bottom</option>
+                                                                <option value="all" data-i18n="web.config.source.crop_link_all">Lock all sides</option>
+                                                            </select>
                                                         </div>
                                                     </div>
                                                     <div class="row g-2">
                                                         <div class="col-md-6">
-                                                            <label class="form-label small mb-1" for="overscanX"><span data-i18n="web.config.source.horizontal">Horizontal:</span> <span id="overscanXValue">0.0%</span></label>
-                                                            <input type="range" class="form-range" id="overscanX" min="0" max="30" step="0.5" value="0">
+                                                            <label class="form-label small mb-1" for="cropTop"><span data-i18n="web.config.source.crop_top">Top:</span> <span id="cropTopValue">0.0%</span></label>
+                                                            <input type="range" class="form-range crop-side" id="cropTop" data-side="top" min="0" max="45" step="0.5" value="0">
                                                         </div>
                                                         <div class="col-md-6">
-                                                            <label class="form-label small mb-1" for="overscanY"><span data-i18n="web.config.source.vertical">Vertical:</span> <span id="overscanYValue">0.0%</span></label>
-                                                            <input type="range" class="form-range" id="overscanY" min="0" max="30" step="0.5" value="0">
+                                                            <label class="form-label small mb-1" for="cropBottom"><span data-i18n="web.config.source.crop_bottom">Bottom:</span> <span id="cropBottomValue">0.0%</span></label>
+                                                            <input type="range" class="form-range crop-side" id="cropBottom" data-side="bottom" min="0" max="45" step="0.5" value="0">
+                                                        </div>
+                                                        <div class="col-md-6">
+                                                            <label class="form-label small mb-1" for="cropLeft"><span data-i18n="web.config.source.crop_left">Left:</span> <span id="cropLeftValue">0.0%</span></label>
+                                                            <input type="range" class="form-range crop-side" id="cropLeft" data-side="left" min="0" max="45" step="0.5" value="0">
+                                                        </div>
+                                                        <div class="col-md-6">
+                                                            <label class="form-label small mb-1" for="cropRight"><span data-i18n="web.config.source.crop_right">Right:</span> <span id="cropRightValue">0.0%</span></label>
+                                                            <input type="range" class="form-range crop-side" id="cropRight" data-side="right" min="0" max="45" step="0.5" value="0">
                                                         </div>
                                                     </div>
-                                                    <div class="form-text small" data-i18n="web.config.source.overscan_hint">Crops a percentage of the source borders before downscaling — useful to remove letterbox or mimic CRT bezels.</div>
+                                                    <div class="d-flex flex-wrap align-items-center gap-2 mt-2">
+                                                        <button type="button" class="btn btn-sm btn-outline-primary" id="cropAutoBtn"><i class="bi bi-magic me-1"></i><span data-i18n="web.config.source.crop_auto">Auto-crop</span></button>
+                                                        <label class="small mb-0" for="cropThreshold"><span data-i18n="web.config.source.crop_threshold">Black threshold:</span> <span id="cropThresholdValue">24</span></label>
+                                                        <input type="range" class="form-range w-auto" id="cropThreshold" min="0" max="96" step="1" value="24">
+                                                        <button type="button" class="btn btn-sm btn-outline-secondary" id="cropResetBtn" data-i18n="web.config.source.crop_reset">Reset</button>
+                                                        <span class="small text-muted" id="cropAutoStatus"></span>
+                                                    </div>
+                                                    <div class="form-text small" data-i18n="web.config.source.overscan_hint">Crops each border of the source independently, before the shader and every output (preview, stream, recording, virtual camera, remote). Auto-crop detects black borders on the live picture.</div>
                                                 </div>
                                             </div>
                                         </div>
@@ -505,16 +527,193 @@
                                         <div class="col-md-6">
                                             <label class="form-label">
                                                 <span data-i18n="web.config.image.brightness">Brightness</span>
-                                                <span id="brightnessValue" class="badge bg-primary ms-2">0.0</span>
+                                                <span id="brightnessValue" class="badge bg-primary ms-2">1.00</span>
+                                                <button type="button" class="btn btn-link btn-sm p-0 ms-2 align-baseline slider-reset" data-reset-target="brightness" data-reset-value="1" data-i18n="web.config.image.reset">Reset</button>
                                             </label>
-                                            <input type="range" class="form-range" id="brightness" min="-1.0" max="1.0" step="0.01" value="0.0">
+                                            <input type="range" class="form-range" id="brightness" min="0.0" max="2.0" step="0.01" value="1.0">
                                         </div>
                                         <div class="col-md-6">
                                             <label class="form-label">
                                                 <span data-i18n="web.config.image.contrast">Contrast</span>
-                                                <span id="contrastValue" class="badge bg-primary ms-2">1.0</span>
+                                                <span id="contrastValue" class="badge bg-primary ms-2">1.00</span>
+                                                <button type="button" class="btn btn-link btn-sm p-0 ms-2 align-baseline slider-reset" data-reset-target="contrast" data-reset-value="1" data-i18n="web.config.image.reset">Reset</button>
                                             </label>
-                                            <input type="range" class="form-range" id="contrast" min="0.0" max="2.0" step="0.01" value="1.0">
+                                            <input type="range" class="form-range" id="contrast" min="0.0" max="5.0" step="0.01" value="1.0">
+                                        </div>
+                                        <div class="col-12">
+                                            <hr>
+                                            <h6 data-i18n="web.config.image.source_color">Source color</h6>
+                                            <p class="text-muted small" data-i18n="web.config.image.source_color_hint">Applied to the captured frame before the shader chain; affects the preview and every output.</p>
+                                        </div>
+                                        <div class="col-md-4">
+                                            <label class="form-label" for="colorRange" data-i18n="web.config.image.color_range">Color range</label>
+                                            <select class="form-select" id="colorRange">
+                                                <option value="auto" data-i18n="web.config.image.color_range_auto">Auto</option>
+                                                <option value="limited" data-i18n="web.config.image.color_range_limited">Limited (16-235)</option>
+                                                <option value="full" data-i18n="web.config.image.color_range_full">Full (0-255)</option>
+                                            </select>
+                                        </div>
+                                        <div class="col-md-4">
+                                            <label class="form-label">
+                                                <span data-i18n="web.config.image.saturation">Saturation</span>
+                                                <span id="saturationValue" class="badge bg-primary ms-2">1.00</span>
+                                                <button type="button" class="btn btn-link btn-sm p-0 ms-2 align-baseline slider-reset" data-reset-target="saturation" data-reset-value="1" data-i18n="web.config.image.reset">Reset</button>
+                                            </label>
+                                            <input type="range" class="form-range" id="saturation" min="0.0" max="3.0" step="0.01" value="1.0">
+                                        </div>
+                                        <div class="col-md-4">
+                                            <label class="form-label">
+                                                <span data-i18n="web.config.image.gamma">Gamma</span>
+                                                <span id="gammaValue" class="badge bg-primary ms-2">1.00</span>
+                                                <button type="button" class="btn btn-link btn-sm p-0 ms-2 align-baseline slider-reset" data-reset-target="gamma" data-reset-value="1" data-i18n="web.config.image.reset">Reset</button>
+                                            </label>
+                                            <input type="range" class="form-range" id="gamma" min="0.2" max="3.0" step="0.01" value="1.0">
+                                        </div>
+                                        <div class="col-12 col-md-6">
+                                            <label class="form-label" for="downscaleFilter" data-i18n="web.config.image.downscale_filter">Source downscale</label>
+                                            <select class="form-select" id="downscaleFilter">
+                                                <option value="auto" data-i18n="web.config.image.downscale_auto">Auto</option>
+                                                <option value="nearest" data-i18n="web.config.image.downscale_nearest">Nearest (sharp pixels)</option>
+                                                <option value="area" data-i18n="web.config.image.downscale_area">Area average</option>
+                                            </select>
+                                            <small class="form-text text-muted" data-i18n="web.config.image.downscale_hint">When the capture resolution is smaller than what the device delivers. Auto: Nearest for whole ratios (2x, 3x), else Area average (keeps every line, averages analog noise down).</small>
+                                        </div>
+                                        <div class="col-12">
+                                            <div class="form-check form-switch">
+                                                <input class="form-check-input" type="checkbox" id="expandLimitedAfterDecode">
+                                                <label class="form-check-label" for="expandLimitedAfterDecode" data-i18n="web.config.image.expand_after_decode">Expand limited range after decode</label>
+                                            </div>
+                                            <small class="form-text text-muted" data-i18n="web.config.image.expand_after_decode_hint">Stretches 16-235 to 0-255 after the YUV to RGB decode, independent of Color range. For grabbers that send limited-range RGB inside a limited-range YUV signal (blacks still grey).</small>
+                                        </div>
+                                        <div class="col-12">
+                                            <button type="button" class="btn btn-outline-secondary btn-sm" id="resetColor" data-i18n="web.config.image.reset_color">Reset color to defaults</button>
+                                        </div>
+                                        <div class="col-12">
+                                            <hr>
+                                            <h6 data-i18n="web.config.image.deinterlace">Deinterlacing</h6>
+                                            <p class="text-muted small" data-i18n="web.config.image.deinterlace_hint">For interlaced sources (480i/576i). Applied before the shader chain. Bob doubles the frame rate.</p>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label class="form-label" for="deinterlaceMode" data-i18n="web.config.image.deinterlace_mode">Mode</label>
+                                            <select class="form-select" id="deinterlaceMode">
+                                                <option value="off" data-i18n="web.config.image.deinterlace_off">Off</option>
+                                                <option value="bob" data-i18n="web.config.image.deinterlace_bob">Bob (double rate)</option>
+                                                <option value="weave" data-i18n="web.config.image.deinterlace_weave">Weave</option>
+                                                <option value="blend" data-i18n="web.config.image.deinterlace_blend">Blend</option>
+                                            </select>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label class="form-label" for="fieldOrder" data-i18n="web.config.image.field_order">Field order</label>
+                                            <select class="form-select" id="fieldOrder">
+                                                <option value="auto" data-i18n="web.config.image.field_order_auto">Auto</option>
+                                                <option value="tff" data-i18n="web.config.image.field_order_tff">Top field first</option>
+                                                <option value="bff" data-i18n="web.config.image.field_order_bff">Bottom field first</option>
+                                            </select>
+                                        </div>
+                                        <div class="col-12">
+                                            <hr>
+                                            <h6 data-i18n="web.config.image.framegen">Frame generation</h6>
+                                            <p class="text-muted small" data-i18n="web.config.image.framegen_hint">Synthesises in-between frames (e.g. 30 to 60 fps). Runs before the shader chain. Needs the next source frame, so it adds up to one source frame of latency.</p>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label class="form-label" for="frameGenMode" data-i18n="web.config.image.framegen_mode">Mode</label>
+                                            <select class="form-select" id="frameGenMode">
+                                                <option value="off" data-i18n="web.config.image.framegen_off">Off</option>
+                                                <option value="2x" data-i18n="web.config.image.framegen_2x">2x source rate</option>
+                                                <option value="3x" data-i18n="web.config.image.framegen_3x">3x source rate</option>
+                                                <option value="4x" data-i18n="web.config.image.framegen_4x">4x source rate</option>
+                                                <option value="display" data-i18n="web.config.image.framegen_display">Display refresh (window only)</option>
+                                                <option value="fill" data-i18n="web.config.image.framegen_fill">Match capture rate (fill repeats)</option>
+                                            </select>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label class="form-label" for="frameGenMethod" data-i18n="web.config.image.framegen_method">Method</label>
+                                            <select class="form-select" id="frameGenMethod">
+                                                <option value="motion" data-i18n="web.config.image.framegen_motion">Motion (GPU optical flow)</option>
+                                                <option value="blend" data-i18n="web.config.image.framegen_blend">Blend (cheap, ghosts on motion)</option>
+                                                <option value="rife" data-i18n="web.config.image.framegen_rife">RIFE (neural, Vulkan; best quality)</option>
+                                            </select>
+                                        </div>
+                                        <div class="col-12">
+                                            <div class="form-check form-switch">
+                                                <input class="form-check-input" type="checkbox" id="frameGenProtectStatic">
+                                                <label class="form-check-label" for="frameGenProtectStatic" data-i18n="web.config.image.framegen_protect">Keep static regions still (HUD, borders)</label>
+                                            </div>
+                                            <div class="form-check form-switch">
+                                                <input class="form-check-input" type="checkbox" id="frameGenSkipRepeats">
+                                                <label class="form-check-label" for="frameGenSkipRepeats" data-i18n="web.config.image.framegen_skip_repeats">Skip repeated frames (game below the capture rate)</label>
+                                            </div>
+                                            <div class="small mt-2" data-i18n="web.config.image.framegen_outputs">Generated frames go to:</div>
+                                            <div class="form-check form-check-inline">
+                                                <input class="form-check-input" type="checkbox" id="frameGenOutWindow">
+                                                <label class="form-check-label" for="frameGenOutWindow" data-i18n="web.config.image.framegen_out_window">Window</label>
+                                            </div>
+                                            <div class="form-check form-check-inline">
+                                                <input class="form-check-input" type="checkbox" id="frameGenOutStream">
+                                                <label class="form-check-label" for="frameGenOutStream" data-i18n="web.config.image.framegen_out_stream">Stream</label>
+                                            </div>
+                                            <div class="form-check form-check-inline">
+                                                <input class="form-check-input" type="checkbox" id="frameGenOutRecording">
+                                                <label class="form-check-label" for="frameGenOutRecording" data-i18n="web.config.image.framegen_out_recording">Recording</label>
+                                            </div>
+                                            <div class="form-check form-check-inline">
+                                                <input class="form-check-input" type="checkbox" id="frameGenOutVirtcam">
+                                                <label class="form-check-label" for="frameGenOutVirtcam" data-i18n="web.config.image.framegen_out_virtcam">Virtual camera</label>
+                                            </div>
+                                            <p class="text-muted small mt-1" data-i18n="web.config.image.framegen_rate_hint">Stream and recording carry the generated frames their FPS allows: set them to the output rate (e.g. 60 for a 30 fps source at 2x). An output switched off keeps the real frames with no added latency.</p>
+                                            <p class="small" id="frameGenStatus"></p>
+                                        </div>
+                                        <!-- #251 — built-in upscaler -->
+                                        <div class="col-12">
+                                            <hr>
+                                            <h6 data-i18n="web.config.image.upscaler">Upscaler</h6>
+                                            <p class="text-muted small" data-i18n="web.config.image.upscaler_hint">Built-in spatial upscaler (FSR 1 / NIS / Anime4K). It runs before or after your shader preset, so both work together. Applies to the window, stream, recording and virtual camera; /raw stays the untouched source.</p>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label class="form-label" for="upscalerMode" data-i18n="web.config.image.upscaler_mode">Mode</label>
+                                            <select class="form-select" id="upscalerMode">
+                                                <option value="off" data-i18n="web.config.image.upscaler_off">Off</option>
+                                                <option value="fsr">FSR 1</option>
+                                                <option value="fsr-easu" data-i18n="web.config.image.upscaler_fsr_easu">FSR 1 (EASU only)</option>
+                                                <option value="nis">NVIDIA NIS</option>
+                                                <option value="anime4k-s">Anime4K S</option>
+                                                <option value="anime4k-m">Anime4K M</option>
+                                                <option value="denoise-fsr" data-i18n="web.config.image.upscaler_denoise_fsr">Denoise + FSR</option>
+                                            </select>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label class="form-label" for="upscalerTarget" data-i18n="web.config.image.upscaler_target">Target</label>
+                                            <select class="form-select" id="upscalerTarget">
+                                                <option value="auto" data-i18n="web.config.image.upscaler_target_auto">Auto (window / output size)</option>
+                                                <option value="2x">2x</option>
+                                                <option value="3x">3x</option>
+                                                <option value="4x">4x</option>
+                                                <option value="custom" data-i18n="web.config.image.upscaler_target_custom">Custom</option>
+                                            </select>
+                                        </div>
+                                        <div class="col-md-6 upscaler-custom d-none">
+                                            <label class="form-label" for="upscalerCustomWidth" data-i18n="web.config.image.width">Width</label>
+                                            <input type="number" class="form-control" id="upscalerCustomWidth" min="16" max="7680" step="16" value="1920">
+                                        </div>
+                                        <div class="col-md-6 upscaler-custom d-none">
+                                            <label class="form-label" for="upscalerCustomHeight" data-i18n="web.config.image.height">Height</label>
+                                            <input type="number" class="form-control" id="upscalerCustomHeight" min="16" max="4320" step="16" value="1080">
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label class="form-label">
+                                                <span data-i18n="web.config.image.upscaler_sharpness">Sharpness</span>
+                                                <span id="upscalerSharpnessValue" class="badge bg-primary ms-2">0.75</span>
+                                            </label>
+                                            <input type="range" class="form-range" id="upscalerSharpness" min="0" max="1" step="0.01" value="0.75">
+                                            <small class="form-text text-muted" data-i18n="web.config.image.upscaler_sharpness_hint">FSR 1, Denoise + FSR and NIS. Not used by EASU only and Anime4K.</small>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label class="form-label" for="upscalerPosition" data-i18n="web.config.image.upscaler_position">Position</label>
+                                            <select class="form-select" id="upscalerPosition">
+                                                <option value="before" data-i18n="web.config.image.upscaler_before">Before the shader chain</option>
+                                                <option value="after" data-i18n="web.config.image.upscaler_after">After the shader chain</option>
+                                            </select>
+                                            <small class="form-text text-muted" data-i18n="web.config.image.upscaler_position_hint">CRT and pixel-art shaders expect the native resolution: with a CRT shader, After keeps the scanline density right.</small>
                                         </div>
                                         <div class="col-md-6">
                                             <div class="form-check form-switch mt-4">
@@ -526,6 +725,12 @@
                                             <div class="form-check form-switch mt-4">
                                                 <input class="form-check-input" type="checkbox" id="fullscreen">
                                                 <label class="form-check-label" for="fullscreen" data-i18n="web.config.image.fullscreen">Fullscreen</label>
+                                            </div>
+                                        </div>
+                                        <div class="col-md-6">
+                                            <div class="form-check form-switch mt-4">
+                                                <input class="form-check-input" type="checkbox" id="fpsOverlay">
+                                                <label class="form-check-label" for="fpsOverlay" data-i18n="web.config.image.fps_overlay">Show FPS counter (local window)</label>
                                             </div>
                                         </div>
                                         <div class="col-12">

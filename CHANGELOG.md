@@ -15,6 +15,113 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.10.0-alpha] - 2026-11-25
+
+Eighteenth alpha release: the **image pipeline**. The picture can now be
+cropped, corrected, deinterlaced, scaled and upscaled before (and
+independently of) the shader chain, and **frame generation** synthesises
+in-between frames, which brings a game that draws 30, 20 or even 14 pictures
+a second to a smooth 60 fps. Everything was validated on real hardware: a
+Dreamcast through SCART→HDMI and a PS4 at 1080p60.
+
+### Added
+
+- **Frame generation** (#247, #248, #256). In-between frames are synthesised
+  before the shader chain, so shaders and every output run once per output
+  frame. Image window > Frame generation, the web portal and the API.
+  - **Methods:**
+    - **Motion:** GPU optical flow, everywhere OpenGL 3.3 / GLES 3 runs.
+    - **RIFE:** a neural interpolator on ncnn + Vulkan, best quality, in the
+      Linux x86_64 and Windows builds. It falls back to Motion frame by frame when it can't
+      deliver in time.
+    - **Blend:** the cheapest.
+  - **Modes:**
+    - **2x / 3x / 4x** the source rate.
+    - **Display refresh** (window only).
+    - **Match capture rate** (`fill`).
+  - **Repeated frames** (#256). Most retro 3D games draw below the signal
+    rate, so the capture repeats each picture. Repeats are now detected and
+    skipped:
+    - exact comparison on clean digital sources;
+    - block averages on analog sources through a converter (noise, field
+      shimmer and scaler ringing).
+
+    Frame generation then follows the game's own cadence. Measured live:
+    - a Dreamcast port at ~14 fps fills to ~53 fps (+69 ms);
+    - a PS4 game at 30 fps fills to ~58 fps (+17 ms).
+  - **Learnt cadence:** a still picture (a pause, a still camera) is held at
+    most ~1.5 game frames, so motion resumes at its own speed.
+  - **Scene cuts:** pairs across a cut are not interpolated, so no cross-fade
+    "morph" frame.
+  - **Per-output switches:** window, stream, recording and virtual camera. An
+    output switched off keeps the real frames with no added latency.
+  - **F9 FPS overlay:** shows real, generated and dropped frames, and the
+    game's own rate.
+- **Built-in upscaler** (#230, #251, #259): FSR 1, FSR 1 EASU, NVIDIA NIS,
+  Anime4K S/M and Denoise+FSR. They are Image-window functions, not shader
+  presets.
+  - They run **before** or **after** your shader chain.
+  - Targets: Auto, 2x, 3x, 4x or a custom size.
+  - The upscaler stands aside, and says so, when the target is not larger than
+    the source (a 1080p capture in a smaller window).
+- **Source downscale filter** (#258). When the capture size you pick is
+  smaller than what the device delivers (640x480 from a 1280x720 grabber), a
+  non-whole ratio is now reduced with an **area average** instead of NEAREST:
+  - every source line is kept;
+  - analog noise is averaged down;
+  - upscalers downstream gain +1.1 to 1.6 dB.
+
+  Auto keeps NEAREST for whole ratios (hard pixel edges).
+- **Overscan crop on every side** (#224, #225):
+  - left, right, top and bottom independently, in pixels or %;
+  - a visual guide and **auto-crop** of black borders;
+  - it works with or without a shader, and `/raw` carries it.
+- **Color controls** (#228, #243):
+  - source color range (Auto / Limited / Full), saturation and gamma;
+  - "Expand limited range after decode" for grabbers that send limited RGB
+    inside limited YUV.
+- **Deinterlacing** (#229): Bob, Weave and Blend, for 480i/576i sources, with
+  the field order on Auto, TFF or BFF.
+- **Output geometry** (#227):
+  - integer scaling, both uniform and "integer + fill";
+  - aspect ratio override;
+  - rotation and flip.
+- **FPS counter overlay** (#226), in the Image window.
+
+### Fixed
+
+- **Audio captured just before a recording started was dropped**; it is now
+  kept (up to 1 s) (#241).
+- **`--stream-width/-height/-fps/-bitrate` were overridden by the saved
+  config**; the command line now wins (#223).
+- **Web portal image sliders** didn't match the app's ranges; each slider now
+  has its own reset (#242).
+
+### Performance
+
+- **YUYV capture conversion runs on up to 4 threads** (#261), with a
+  bit-identical result. A 1080p60 capture went from 8.9 to 4.3 ms per frame
+  (loop 17.8 → 12.8 ms), which removed the stutter under frame generation.
+
+### Known limitations
+
+- **RIFE above 720p** can't hold 60 fps on every frame and may stutter; Motion
+  stays smooth at 1080p (#260).
+- **RIFE is not available on macOS or the ARM builds** (#255); Motion is.
+
+### Tooling
+
+- `tools/framegen-fill-test.sh` (in CI) covers repeat detection, fill, the
+  learnt cadence and scene cuts.
+- `--upscaler-bench` measures upscaler quality: PSNR, SSIM and edges against
+  ground truth (#262).
+- The smoke and A/V sync tests run headless in an isolated session (#240).
+- Diagnostics behind environment variables:
+  - `RETROCAPTURE_FRAMEGEN_DEBUG=1`;
+  - `RETROCAPTURE_LOOP_PROFILE=1`.
+
+---
+
 ## [0.9.1-alpha] - 2026-11-24
 
 Seventeenth alpha release, a hotfix for **streaming, recording and the remote client**. The video encoder had been coding every frame as a keyframe (all-intra) since 0.3–0.5. Streams and recordings were heavier and lower quality than their bitrate should allow, and a remote client on a laptop couldn't decode the host's `/raw` feed in real time.

@@ -1,0 +1,31 @@
+# NVIDIA Image Scaling (NIS) v1.0.3: spatial upscale + adaptive sharpening.
+# pass 0: luma prepass (source res), pass 1: 6x128 coefficient LUT,
+# pass 2: NVScaler straight to the viewport.
+shaders = 3
+
+shader0 = shaders/nis/nis-luma.glsl
+filter_linear0 = true
+wrap_mode0 = clamp_to_edge
+scale_type0 = source
+scale0 = 1.0
+float_framebuffer0 = true
+alias0 = NISLuma
+
+shader1 = shaders/nis/nis-coef.glsl
+filter_linear1 = false
+wrap_mode1 = clamp_to_edge
+scale_type_x1 = absolute
+scale_x1 = 6
+scale_type_y1 = absolute
+scale_y1 = 128
+float_framebuffer1 = true
+alias1 = NISCoef
+
+shader2 = shaders/nis/nis-scaler.glsl
+filter_linear2 = false
+wrap_mode2 = clamp_to_edge
+scale_type2 = viewport
+scale2 = 1.0
+
+parameters = "NIS_SHARPNESS"
+NIS_SHARPNESS = 0.5

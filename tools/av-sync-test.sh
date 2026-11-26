@@ -23,6 +23,15 @@
 #                      pre-#197 PulseAudio capture delivered 100 ms)
 #   AVSYNC_PORT        stream port (default 8091)
 #   AVSYNC_FPS         capture / stream fps (default 60)
+#   AVSYNC_STREAM_FPS  stream fps when it differs from the capture's (#247:
+#                      e.g. 30 fps source + --frame-gen 2x at 60)
+#   AVSYNC_PATTERN     test-pattern variant (RETROCAPTURE_TEST_PATTERN, e.g.
+#                      "motion"); the sync flash band is in every variant
+#                      except levels / interlaced
+#   AVSYNC_WIDTH / AVSYNC_HEIGHT  capture size (default 1280x720)
+#   AVSYNC_RECORD_FPS  recording fps (default: the app's)
+#   AVSYNC_EXTRA_ARGS  extra app arguments (word-split), e.g.
+#                      "--frame-gen 2x --frame-gen-method motion"
 #   AVSYNC_MAX_MEAN_MS / AVSYNC_MAX_ABS_MS / AVSYNC_MAX_DRIFT  thresholds
 #                      (defaults 40 ms / 80 ms / 5 ms per min)
 #   AVSYNC_MAX_GLITCHES  allowed frame-order glitches (default 0): extra flash
@@ -30,8 +39,8 @@
 #   AVSYNC_REPORT_ONLY=1  print the numbers but always exit 0 (baselines)
 #   AVSYNC_KEEP=1      keep the work dir (captured files) for inspection
 #
-# Needs: ffmpeg, ffprobe, curl, python3 + numpy, and a display ($DISPLAY or
-# xvfb-run), same as tools/smoke-test.sh. Exit 0 = in sync.
+# Needs: ffmpeg, ffprobe, curl, python3 + numpy, xvfb-run on Linux (runs
+# headless and isolated like tools/smoke-test.sh). Exit 0 = in sync.
 
 set -u
 
@@ -43,8 +52,10 @@ SECONDS_TO_RUN="${AVSYNC_SECONDS:-40}"
 SKEW="${AVSYNC_SKEW_PPM:-1000}"
 PORT="${AVSYNC_PORT:-8091}"
 FPS="${AVSYNC_FPS:-60}"
+STREAM_FPS="${AVSYNC_STREAM_FPS:-$FPS}"
+read -r -a EXTRA_ARGS <<< "${AVSYNC_EXTRA_ARGS:-}"
 FRAGMENT_MS="${AVSYNC_FRAGMENT_MS:-20}"
-W=1280; H=720
+W="${AVSYNC_WIDTH:-1280}"; H="${AVSYNC_HEIGHT:-720}"
 WORK="$(mktemp -d /tmp/rc-avsync.XXXXXX)"
 APP_PID=""
 CURL_PID=""
@@ -86,11 +97,20 @@ done
 python3 -c "import numpy" 2>/dev/null || fail "python3 numpy is required"
 [ -x "$BIN" ] || fail "binary not found/executable: $BIN"
 
+# #240 — isolate the app under test from the user's desktop session. xvfb-run
+# alone isn't enough: GLFW prefers Wayland when WAYLAND_DISPLAY is inherited
+# (test windows popped up on the real desktop) and the tray registers on the
+# session D-Bus. On Linux, always run headless in a private session unless
+# RC_TEST_REAL_DISPLAY=1 asks for the real display (debugging).
 LAUNCH_PREFIX=()
 USE_XVFB=0
-# macOS has its own window server (no X/DISPLAY): launch directly there.
-if [ "$(uname)" != "Darwin" ] && [ -z "${DISPLAY:-}" ]; then
-    command -v xvfb-run >/dev/null 2>&1 || fail "no DISPLAY and xvfb-run not installed"
+if [ "$(uname)" != "Darwin" ] && [ "${RC_TEST_REAL_DISPLAY:-0}" != 1 ]; then
+    command -v xvfb-run >/dev/null 2>&1 || \
+        fail "xvfb-run not installed (need a headless GL context; RC_TEST_REAL_DISPLAY=1 uses \$DISPLAY)"
+    unset WAYLAND_DISPLAY XDG_SESSION_TYPE DISPLAY
+    mkdir -p "$WORK/runtime" && chmod 700 "$WORK/runtime"
+    export XDG_RUNTIME_DIR="$WORK/runtime"
+    export DBUS_SESSION_BUS_ADDRESS="disabled:"
     # Explicit 24-bit screen: xvfb-run defaults to 640x480x8.
     LAUNCH_PREFIX=(setsid xvfb-run -a -s "-screen 0 1920x1080x24")
     USE_XVFB=1
@@ -104,16 +124,18 @@ port_up() {
 port_up && fail "port $PORT is already serving — stop it first (or set AVSYNC_PORT)"
 
 echo "▶ av-sync-test: $BIN"
-note "${SECONDS_TO_RUN}s @ ${FPS} fps, fake audio clock skew ${SKEW} ppm, ${FRAGMENT_MS} ms fragments"
+note "${SECONDS_TO_RUN}s @ ${FPS} fps (stream ${STREAM_FPS}), fake audio clock skew ${SKEW} ppm, ${FRAGMENT_MS} ms fragments"
+[ -n "${AVSYNC_EXTRA_ARGS:-}" ] && note "extra args: ${AVSYNC_EXTRA_ARGS}"
 
 # Isolated XDG dirs + cwd so the recording (relative output path) lands here.
 mkdir -p "$WORK/cfg" "$WORK/data" "$WORK/run"
 (
     cd "$WORK/run" && XDG_CONFIG_HOME="$WORK/cfg" XDG_DATA_HOME="$WORK/data" \
+    RETROCAPTURE_TEST_PATTERN="${AVSYNC_PATTERN:-}" \
     exec ${LAUNCH_PREFIX[@]+"${LAUNCH_PREFIX[@]}"} "$BIN" --source test --audio-source test \
         --test-audio-skew-ppm "$SKEW" --test-audio-fragment-ms "$FRAGMENT_MS" --stream-enable --hide-ui \
         --stream-port "$PORT" --width "$W" --height "$H" --fps "$FPS" \
-        --stream-fps "$FPS"
+        --stream-fps "$STREAM_FPS" ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}
 ) > "$WORK/app.log" 2>&1 &
 APP_PID=$!
 
@@ -136,7 +158,7 @@ sleep 1
 # Record into the work dir, not the user's Videos folder.
 mkdir -p "$WORK/rec"
 curl -s -m 5 -X POST -H 'Content-Type: application/json' \
-     -d "{\"outputPath\":\"$WORK/rec/\"}" "http://127.0.0.1:$PORT/api/v1/recording/settings" > /dev/null \
+     -d "{\"outputPath\":\"$WORK/rec/\"${AVSYNC_RECORD_FPS:+,\"fps\":$AVSYNC_RECORD_FPS}}" "http://127.0.0.1:$PORT/api/v1/recording/settings" > /dev/null \
     || fail "could not set the recording output path"
 sleep 0.5
 curl -s -m 5 -X POST -H 'Content-Type: application/json' \

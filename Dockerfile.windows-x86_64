@@ -43,6 +43,22 @@ RUN echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99no-check-
     echo "✅ NSIS instalado para geração de instaladores"
 
 # Script de build
+# #248 — ncnn with Vulkan for RIFE frame generation, cross-built into the
+# MXE prefix (found by find_package there). Its bundled glslang needs
+# CMake >= 3.13 (the image's is 3.10), so a pinned CMake binary builds it;
+# _WIN32_WINNT=0x0601 exposes the SRW lock / condition variable API ncnn
+# uses. vulkan-1.dll is loaded at run time (NCNN_SIMPLEVK): no link
+# dependency, and a PC without a Vulkan driver falls back to Motion.
+RUN curl -fsSL -o /tmp/cmake.tgz https://github.com/Kitware/CMake/releases/download/v3.27.9/cmake-3.27.9-linux-x86_64.tar.gz && \
+    echo "72b01478eeb312bf1a0136208957784fe55a7b587f8d9f9142a7fc9b0b9e9a28  /tmp/cmake.tgz" | sha256sum -c - && \
+    mkdir -p /opt/cmake-3.27 && tar xzf /tmp/cmake.tgz -C /opt/cmake-3.27 --strip-components=1 && \
+    rm /tmp/cmake.tgz
+COPY tools/build-ncnn.sh /usr/local/bin/
+RUN PATH=/usr/src/mxe/usr/bin:$PATH CMAKE=/opt/cmake-3.27/bin/cmake \
+    /usr/local/bin/build-ncnn.sh /usr/src/mxe/usr/x86_64-w64-mingw32.static \
+    -DCMAKE_TOOLCHAIN_FILE=/usr/src/mxe/usr/x86_64-w64-mingw32.static/share/cmake/mxe-conf.cmake \
+    "-DCMAKE_C_FLAGS=-D_WIN32_WINNT=0x0601" "-DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=0x0601"
+
 COPY tools/docker-build-windows-x86_64.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/docker-build-windows-x86_64.sh
 

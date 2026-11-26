@@ -3,6 +3,7 @@
 # no audio device) under xvfb:
 #   - tools/smoke-test.sh   capture → shader → encode → stream → decode
 #   - tools/av-sync-test.sh A/V offset / drift of /stream and a recording
+#   - tools/framegen-fill-test.sh  frame generation repeat detection / fill (#256)
 #                           with a skewed fake audio clock (#196 / #201)
 name: CI
 
@@ -57,6 +58,11 @@ jobs:
       - name: A/V sync test (fake audio clock +1000 ppm)
         run: AVSYNC_PORT=8095 AVSYNC_SECONDS=40 AVSYNC_FPS=30 AVSYNC_SKEW_PPM=1000 ./tools/av-sync-test.sh
 
+      # #256 — repeat detection, capture-rate fill, game cadence, scene cuts
+      # (Blend method: runs on the runner's software GL).
+      - name: Frame generation fill test
+        run: FILL_PORT=8096 FILL_KEEP=1 ./tools/framegen-fill-test.sh
+
       - name: Upload logs
         if: failure()
         uses: actions/upload-artifact@v4
@@ -66,4 +72,6 @@ jobs:
             build-linux-x86_64.log
             /tmp/rc-smoke.*/**/*.log
             /tmp/rc-smoke.*/*.ts
+            /tmp/rc-fill.*/*.log
+            /tmp/rc-fill.*/*.json
           if-no-files-found: ignore

@@ -1,4 +1,6 @@
 #include "FrameCapturePipeline.h"
+#include "../renderer/AreaDownscaler.h"
+#include "../utils/LoopProfiler.h"
 #include "Application.h"
 #include "../utils/Logger.h"
 #include "../utils/Paths.h"
@@ -14,8 +16,11 @@
 #endif
 // FrameProcessor and OpenGLRenderer work on all platforms
 #include "../processing/FrameProcessor.h"
+#include "../processing/SourceCrop.h"
+#include "../processing/UpscalerStage.h"
 #include "../renderer/OpenGLRenderer.h"
 #include "../renderer/PBOManager.h"
+#include "../renderer/OutputGeometry.h"
 #ifdef USE_SDL2
 #include "../output/WindowManagerSDL.h"
 #else
@@ -90,6 +95,194 @@ FrameCapturePipeline::FrameCapturePipeline(Application &app) : m_app(app)
 {
 }
 
+namespace
+{
+// (Re)create an RGB colour render target of the given size. Used by the
+// source pre-pass (crop) and the shader-source rescale pass.
+void ensureColorTarget(GLuint &fbo, GLuint &tex, uint32_t &curW, uint32_t &curH,
+                       uint32_t w, uint32_t h)
+{
+    if (fbo != 0 && tex != 0 && curW == w && curH == h)
+        return;
+    if (tex != 0)
+    {
+        glDeleteTextures(1, &tex);
+        tex = 0;
+    }
+    if (fbo != 0)
+    {
+        glDeleteFramebuffers(1, &fbo);
+        fbo = 0;
+    }
+
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB,
+                 static_cast<GLsizei>(w), static_cast<GLsizei>(h),
+                 0, GL_RGB, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    glGenFramebuffers(1, &fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, tex, 0);
+
+    curW = w;
+    curH = h;
+}
+} // namespace
+
+void FrameCapturePipeline::getSourceCropFractions(uint32_t srcW, uint32_t srcH,
+                                                  float &left, float &right,
+                                                  float &top, float &bottom) const
+{
+    left = right = top = bottom = 0.0f;
+    if (!m_app.m_ui || srcW == 0 || srcH == 0)
+        return;
+    m_app.m_ui->getSourceCrop().fractions(srcW, srcH, left, right, top, bottom);
+    // A Remote source's texture is stored the other way up (see the
+    // shouldFlipY note below): its row 0 is the BOTTOM of the picture.
+    if (m_app.m_ui->getSourceType() == UIManager::SourceType::Remote)
+        std::swap(top, bottom);
+}
+
+void FrameCapturePipeline::runAutoCropSampling()
+{
+    // #225 — auto-crop: sample a few frames of the UNCROPPED source, detect
+    // the black borders on each, and keep the smallest border per side (a
+    // letterbox is black on every frame; a dark scene is not a border).
+    if (!m_app.m_ui || !m_app.m_frameProcessor)
+        return;
+    int threshold = 0;
+    if (m_app.m_ui->takeSourceAutoCropRequest(threshold))
+    {
+        m_autoCrop = AutoCropSampler{};
+        m_autoCrop.active = true;
+        m_autoCrop.threshold = threshold;
+    }
+    if (!m_autoCrop.active)
+        return;
+
+    const GLuint tex = m_app.m_frameProcessor->getTexture();
+    const uint32_t w = m_app.m_frameProcessor->getTextureWidth();
+    const uint32_t h = m_app.m_frameProcessor->getTextureHeight();
+    const uint64_t seq = m_app.m_frameProcessor->getFrameSeq();
+    if (tex == 0 || w == 0 || h == 0)
+        return;
+    if (m_autoCrop.samples > 0 && (w != m_autoCrop.w || h != m_autoCrop.h))
+    {
+        // Source resized mid-sampling: start over on the new size.
+        const int t = m_autoCrop.threshold;
+        m_autoCrop = AutoCropSampler{};
+        m_autoCrop.active = true;
+        m_autoCrop.threshold = t;
+    }
+    // Space the samples out a little so they see different frames.
+    if (m_autoCrop.samples > 0 && seq < m_autoCrop.lastSeq + AutoCropSampler::kSeqSpacing)
+        return;
+    m_autoCrop.lastSeq = seq;
+    m_autoCrop.w = w;
+    m_autoCrop.h = h;
+
+    GLuint fbo = 0;
+    glGenFramebuffers(1, &fbo);
+    GLint prevFBO = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFBO);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+    bool ok = false;
+    BlackBorders b;
+    bool found = false;
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE)
+    {
+        const size_t stride = ((static_cast<size_t>(w) * 3 + 3) / 4) * 4;
+        m_autoCrop.pixels.resize(stride * h);
+        glReadPixels(0, 0, static_cast<GLsizei>(w), static_cast<GLsizei>(h),
+                     GL_RGB, GL_UNSIGNED_BYTE, m_autoCrop.pixels.data());
+        found = detectBlackBorders(m_autoCrop.pixels.data(), w, h, stride,
+                                   m_autoCrop.threshold, b);
+        ok = true;
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, prevFBO);
+    glDeleteFramebuffers(1, &fbo);
+    if (!ok)
+        return;
+
+    ++m_autoCrop.samples;
+    if (found)
+    {
+        // Readback row 0 is texture row 0: the top of the picture, except
+        // for a Remote source (stored bottom-up).
+        if (m_app.m_ui->getSourceType() == UIManager::SourceType::Remote)
+            std::swap(b.top, b.bottom);
+        if (m_autoCrop.found == 0)
+        {
+            m_autoCrop.result = b;
+        }
+        else
+        {
+            m_autoCrop.result.top = std::min(m_autoCrop.result.top, b.top);
+            m_autoCrop.result.bottom = std::min(m_autoCrop.result.bottom, b.bottom);
+            m_autoCrop.result.left = std::min(m_autoCrop.result.left, b.left);
+            m_autoCrop.result.right = std::min(m_autoCrop.result.right, b.right);
+        }
+        ++m_autoCrop.found;
+    }
+
+    if (m_autoCrop.samples >= AutoCropSampler::kSamples)
+    {
+        const BlackBorders &r = m_autoCrop.result;
+        LOG_INFO("Auto-crop: " + std::to_string(m_autoCrop.found) + "/" +
+                 std::to_string(m_autoCrop.samples) + " frames with picture, borders top=" +
+                 std::to_string(r.top) + " bottom=" + std::to_string(r.bottom) +
+                 " left=" + std::to_string(r.left) + " right=" + std::to_string(r.right) +
+                 " px on " + std::to_string(w) + "x" + std::to_string(h));
+        m_app.m_ui->applySourceAutoCrop(m_autoCrop.found > 0, r.top, r.bottom, r.left, r.right, w, h);
+        m_autoCrop.active = false;
+        m_autoCrop.pixels.clear();
+        m_autoCrop.pixels.shrink_to_fit();
+    }
+}
+
+void FrameCapturePipeline::upscalerTarget(uint32_t refW, uint32_t refH,
+                                          uint32_t &tw, uint32_t &th) const
+{
+    // Auto = the output resolution when set, else the window.
+    uint32_t autoW = m_app.m_outputWidth, autoH = m_app.m_outputHeight;
+    if (autoW == 0 || autoH == 0)
+    {
+        autoW = m_app.m_window ? m_app.m_window->getWidth() : m_app.m_windowWidth;
+        autoH = m_app.m_window ? m_app.m_window->getHeight() : m_app.m_windowHeight;
+    }
+    const bool fitAspect = m_app.m_maintainAspect ||
+                           (m_app.m_ui && m_app.m_ui->getOutputGeometry().forcesAspect());
+    m_upscalerSettings.targetSize(refW, refH, autoW, autoH, fitAspect, tw, th);
+}
+
+GLuint FrameCapturePipeline::runUpscaler(UpscalerSettings::Position where, GLuint tex,
+                                         uint32_t &w, uint32_t &h,
+                                         uint32_t refW, uint32_t refH)
+{
+    if (!m_app.m_upscaler || !UpscalerStage::runsAt(m_upscalerSettings, where))
+        return tex;
+    uint32_t tw = 0, th = 0;
+    upscalerTarget(refW, refH, tw, th);
+    // Custom target: the stage clamps it the same way; pass it as "auto"
+    // so the stage computes exactly the size chosen here.
+    UpscalerSettings s = m_upscalerSettings;
+    s.target = UpscalerSettings::Target::Auto;
+    const GLuint out = m_app.m_upscaler->process(s, where, tex, w, h, refW, refH,
+                                                 tw, th, /*fitAspect=*/false);
+    if (m_app.m_ui)
+        m_app.m_ui->setUpscalerIdle(m_app.m_upscaler->isIdleNoUpscale());
+    if (out != tex)
+        m_upscalerRan = true;
+    return out;
+}
+
 bool FrameCapturePipeline::renderAndDistributeFrame()
 {
     // #152 - the per-frame render + shader + output-resolution + window draw +
@@ -115,15 +308,189 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
         LOG_DEBUG("================================");
     }
     
+    // #225 — auto-crop sampling reads the uncropped capture texture.
+    runAutoCropSampling();
+
+    // #224 — source pre-pass: the crop (overscan) is a property of the
+    // SOURCE, so it runs here, before and independently of the shader
+    // chain. The cropped texture then feeds the shader (when one is
+    // active) or is rendered directly (when not), and the /raw source
+    // readback below reads it too — so the preview, /stream, recording,
+    // virtual camera and /raw all honour the crop with the shader on or
+    // off. The crop zooms the visible region back to the source size, so
+    // downstream dimensions don't change.
+    GLuint sourceTex = m_app.m_frameProcessor->getTexture();
+    uint32_t sourceW = m_app.m_frameProcessor->getTextureWidth();
+    uint32_t sourceH = m_app.m_frameProcessor->getTextureHeight();
+    {
+        float cropL = 0.0f, cropR = 0.0f, cropT = 0.0f, cropB = 0.0f;
+        getSourceCropFractions(sourceW, sourceH, cropL, cropR, cropT, cropB);
+        const bool needsCrop = (cropL > 0.0f || cropR > 0.0f || cropT > 0.0f || cropB > 0.0f);
+        if (needsCrop && sourceTex != 0 && sourceW > 0 && sourceH > 0)
+        {
+            ensureColorTarget(m_app.m_sourceCropFBO, m_app.m_sourceCropTexture,
+                              m_app.m_sourceCropFBOWidth, m_app.m_sourceCropFBOHeight,
+                              sourceW, sourceH);
+            glBindFramebuffer(GL_FRAMEBUFFER, m_app.m_sourceCropFBO);
+
+            // Enlarge the viewport so only the visible region of the source
+            // lands inside the FBO. FBO row 0 is texture row 0, i.e. the
+            // TOP of the picture (the window render flips Y), so the top
+            // crop pushes the viewport below y=0 and the bottom crop past
+            // the FBO height.
+            const float visibleFracX = 1.0f - cropL - cropR;
+            const float visibleFracY = 1.0f - cropT - cropB;
+            const float vpW = static_cast<float>(sourceW) / visibleFracX;
+            const float vpH = static_cast<float>(sourceH) / visibleFracY;
+            const GLint vpX = static_cast<GLint>(-cropL * vpW);
+            const GLint vpY = static_cast<GLint>(-cropT * vpH);
+            glViewport(vpX, vpY, static_cast<GLsizei>(vpW), static_cast<GLsizei>(vpH));
+
+            // NEAREST keeps the pixelated look of retro sources (same
+            // filter the pre-#224 shader-branch crop used); the
+            // FrameProcessor's filter is restored afterwards.
+            const GLint restoreFilter = m_app.m_frameProcessor->getTextureFilterLinear()
+                                            ? GL_LINEAR
+                                            : GL_NEAREST;
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, sourceTex);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+
+            m_app.m_renderer->renderTexture(sourceTex, sourceW, sourceH,
+                                            false, false, 1.0f, 1.0f, false,
+                                            sourceW, sourceH,
+                                            /*preserveViewport=*/true);
+
+            glBindTexture(GL_TEXTURE_2D, sourceTex);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, restoreFilter);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, restoreFilter);
+
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            sourceTex = m_app.m_sourceCropTexture;
+        }
+    }
+
+    // #251 — the built-in upscaler's settings, one copy for every pass of
+    // this iteration (live and generated run the same stage).
+    m_upscalerSettings = m_app.m_ui ? m_app.m_ui->getUpscalerSettings() : UpscalerSettings();
+
+    // #198 — identity + capture time of the live frame.
+    const FrameMeta liveMeta{m_app.m_frameProcessor ? m_app.m_frameProcessor->getFrameSeq() : 0,
+                             m_app.m_frameProcessor ? m_app.m_frameProcessor->getFrameTimestampUs() : 0};
+
+    // #247 — frame generation. Off (the default) or idle: one pass over the
+    // live frame feeding the window and every output, exactly as before.
+    // Active: the outputs that get generated frames are fed by a pass over
+    // the output timeline; the others (and /raw, the remote clients' own
+    // source) keep the live frame, so a latency-sensitive window can stay
+    // on real frames while the stream / recording get the generated ones.
+    PassSpec live;
+    live.srcTex = sourceTex;
+    live.srcW = sourceW;
+    live.srcH = sourceH;
+    live.meta = liveMeta;
+    live.pbo = m_app.m_pboManager.get();
+    live.pboInFlight = &m_pboInFlight;
+
+    FrameGenPlan plan;
+    {
+        LoopProfiler::Scope prof(LoopProfiler::FrameGen);
+        plan = planFrameGeneration(sourceTex, sourceW, sourceH, liveMeta);
+    }
+    if (!plan.active)
+    {
+        if (renderPass(live))
+            return true;
+    }
+    else
+    {
+        PassSpec gen;
+        gen.srcTex = plan.frame.tex;
+        gen.srcW = plan.frame.w;
+        gen.srcH = plan.frame.h;
+        gen.meta = FrameMeta{plan.frame.seq, plan.frame.tsUs, plan.streamPhaseOk, plan.recordPhaseOk};
+        gen.window = plan.genWindow;
+        gen.stream = plan.genStream;
+        gen.record = plan.genRecord;
+        gen.virtcam = plan.genVirtcam;
+        gen.raw = false;
+        if (!m_genPbo)
+            m_genPbo = std::make_unique<PBOManager>();
+        gen.pbo = m_genPbo.get();
+        gen.pboInFlight = &m_genPboInFlight;
+
+        live.window = !plan.genWindow;
+        live.stream = plan.liveStream;
+        live.record = plan.liveRecord;
+        live.virtcam = plan.liveVirtcam;
+        live.raw = true;
+        const bool liveNeeded = live.window || plan.liveOutputsActive;
+
+        // The chain's temporal state (FrameCount, feedback, history) follows
+        // the window's sequence; the other run of this iteration is frozen.
+        // #251 — the upscaler's own engine is frozen in lockstep, so its
+        // FrameCount doesn't advance twice per iteration either.
+        ShaderEngine *se = m_app.m_shaderEngine.get();
+        UpscalerStage *us = m_app.m_upscaler.get();
+        auto freeze = [se, us](bool frozen) {
+            if (se) se->setStateFrozen(frozen);
+            if (us) us->setStateFrozen(frozen);
+        };
+        bool early = false;
+        if (liveNeeded)
+        {
+            if (!live.window) freeze(true);
+            early = renderPass(live);
+            freeze(false);
+        }
+        if (!early)
+        {
+            if (!gen.window) freeze(true);
+            early = renderPass(gen);
+            freeze(false);
+        }
+        if (early)
+            return true;
+    }
+
+    return finishFrame();
+}
+
+bool FrameCapturePipeline::renderPass(const PassSpec &spec)
+{
+    // #247 — one render of a source frame through the shader chain to the
+    // window (spec.window) and/or the outputs the spec selects. With every
+    // output selected and the live frame this is the pre-#247 body as is.
+    const GLuint sourceTex = spec.srcTex;
+    const uint32_t sourceW = spec.srcW;
+    const uint32_t sourceH = spec.srcH;
+    const bool passStream = spec.stream && m_app.m_streamManager && m_app.m_streamManager->isActive();
+    const bool passRaw = spec.raw && m_app.m_streamManager && m_app.m_streamManager->isActive();
+    const bool passRecord = spec.record && m_app.m_recordingManager && m_app.m_recordingManager->isRecording();
+#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
+    const bool passVirtcam = spec.virtcam && m_app.m_virtcam && m_app.m_virtcam->isRunning();
+#else
+    const bool passVirtcam = false;
+#endif
+    PBOManager *const pbo = spec.pbo;
+    FrameMeta &pboInFlight = *spec.pboInFlight;
+
     // Apply shader if active
-    GLuint textureToRender = m_app.m_frameProcessor->getTexture();
+    GLuint textureToRender = sourceTex;
     bool isShaderTexture = false;
+    // Size of textureToRender when isShaderTexture (shader chain and / or
+    // the #251 upscaler produced it).
+    uint32_t processedW = 0, processedH = 0;
+
+    // #251 — set by runUpscaler() when the upscaler produced this pass's image.
+    m_upscalerRan = false;
 
     // Master toggle: when the user disables the shader pipeline
     // from the Shader tab we keep the loaded preset / parameters
     // intact but stop running the chain on the live render. The
     // captured texture for stream/recording then reflects the
-    // raw source — same path the user sees on the window.
+    // (cropped) source — same path the user sees on the window.
     const bool shaderPipelineOn = (!m_app.m_ui || m_app.m_ui->getShaderPipelineEnabled());
     if (shaderPipelineOn && m_app.m_shaderEngine && m_app.m_shaderEngine->isShaderActive())
     {
@@ -140,22 +507,15 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
             m_app.m_shaderEngine->setViewport(currentWidth, currentHeight);
         }
 
-        // Source para o shader chain. Por default, usamos a textura full-res
-        // do FrameProcessor. Se o usuário pediu uma resolução LÓGICA menor que
-        // a que o V4L2 entregou (driver ajustou pra mais próxima suportada),
-        // fazemos um downscale com filter=NEAREST aqui — assim shaders CRT
-        // recebem entrada "pixelada" baixa-res como foram desenhados, em vez
-        // de 1080p suave onde scanlines viram sub-pixel e somem.
-        GLuint shaderSrcTex = m_app.m_frameProcessor->getTexture();
-        uint32_t shaderSrcW = m_app.m_frameProcessor->getTextureWidth();
-        uint32_t shaderSrcH = m_app.m_frameProcessor->getTextureHeight();
-
-        // Lê overscan antes de decidir o caminho — se há overscan, mesmo
-        // que não precise de downscale, ainda fazemos o pass do FBO pra
-        // aplicar o crop via viewport offset.
-        const float overscanXPctRead = m_app.m_ui ? m_app.m_ui->getSourceOverscanPercentX() : 0.0f;
-        const float overscanYPctRead = m_app.m_ui ? m_app.m_ui->getSourceOverscanPercentY() : 0.0f;
-        const bool needsOverscan = (overscanXPctRead > 0.001f || overscanYPctRead > 0.001f);
+        // Source para o shader chain: a textura (já cortada) do pre-pass.
+        // Se o usuário pediu uma resolução LÓGICA menor que a que o V4L2
+        // entregou (driver ajustou pra mais próxima suportada), fazemos um
+        // downscale com filter=NEAREST aqui — assim shaders CRT recebem
+        // entrada "pixelada" baixa-res como foram desenhados, em vez de
+        // 1080p suave onde scanlines viram sub-pixel e somem.
+        GLuint shaderSrcTex = sourceTex;
+        uint32_t shaderSrcW = sourceW;
+        uint32_t shaderSrcH = sourceH;
 
         // Logical size the shader should see. Local capture: what the user
         // asked for (the driver may have picked something bigger). Remote
@@ -181,71 +541,25 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                                    (wantW > shaderSrcW || wantH > shaderSrcH) &&
                                    shaderSrcTex != 0);
 
-        if ((needsDownscale || needsUpscale || needsOverscan) && shaderSrcTex != 0)
+        if ((needsDownscale || needsUpscale) && shaderSrcTex != 0)
         {
-            // FBO size: logical quando há rescale, source dims caso contrário.
-            const uint32_t fboW = (needsDownscale || needsUpscale) ? wantW : shaderSrcW;
-            const uint32_t fboH = (needsDownscale || needsUpscale) ? wantH : shaderSrcH;
-
-            if (m_app.m_shaderSourceFBO == 0 ||
-                m_app.m_shaderSourceFBOWidth != fboW ||
-                m_app.m_shaderSourceFBOHeight != fboH)
-            {
-                if (m_app.m_shaderSourceTexture != 0)
-                {
-                    glDeleteTextures(1, &m_app.m_shaderSourceTexture);
-                    m_app.m_shaderSourceTexture = 0;
-                }
-                if (m_app.m_shaderSourceFBO != 0)
-                {
-                    glDeleteFramebuffers(1, &m_app.m_shaderSourceFBO);
-                    m_app.m_shaderSourceFBO = 0;
-                }
-
-                glGenTextures(1, &m_app.m_shaderSourceTexture);
-                glBindTexture(GL_TEXTURE_2D, m_app.m_shaderSourceTexture);
-                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB,
-                             static_cast<GLsizei>(fboW),
-                             static_cast<GLsizei>(fboH),
-                             0, GL_RGB, GL_UNSIGNED_BYTE, nullptr);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-                glGenFramebuffers(1, &m_app.m_shaderSourceFBO);
-                glBindFramebuffer(GL_FRAMEBUFFER, m_app.m_shaderSourceFBO);
-                glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                                       GL_TEXTURE_2D, m_app.m_shaderSourceTexture, 0);
-
-                m_app.m_shaderSourceFBOWidth = fboW;
-                m_app.m_shaderSourceFBOHeight = fboH;
-            }
+            const uint32_t fboW = wantW;
+            const uint32_t fboH = wantH;
+            ensureColorTarget(m_app.m_shaderSourceFBO, m_app.m_shaderSourceTexture,
+                              m_app.m_shaderSourceFBOWidth, m_app.m_shaderSourceFBOHeight,
+                              fboW, fboH);
 
             glBindFramebuffer(GL_FRAMEBUFFER, m_app.m_shaderSourceFBO);
-
-            // Overscan: amplia o viewport de modo que apenas a região
-            // central (1 - 2*overscan) do source caia dentro do FBO.
-            // X e Y independentes; 0 = sem corte, 0.45 = corta 45% de cada lado.
-            // std::clamp é C++17; o MinGW antigo do build Windows não tem.
-            const float overscanX = std::max(0.0f, std::min(0.45f, overscanXPctRead / 100.0f));
-            const float overscanY = std::max(0.0f, std::min(0.45f, overscanYPctRead / 100.0f));
-            const float visibleFracX = 1.0f - 2.0f * overscanX;
-            const float visibleFracY = 1.0f - 2.0f * overscanY;
-            const float vpW = static_cast<float>(fboW) / visibleFracX;
-            const float vpH = static_cast<float>(fboH) / visibleFracY;
-            const GLint vpX = static_cast<GLint>((static_cast<float>(fboW) - vpW) / 2.0f);
-            const GLint vpY = static_cast<GLint>((static_cast<float>(fboH) - vpH) / 2.0f);
-            glViewport(vpX, vpY,
-                       static_cast<GLsizei>(vpW),
-                       static_cast<GLsizei>(vpH));
+            glViewport(0, 0, static_cast<GLsizei>(fboW), static_cast<GLsizei>(fboH));
 
             // Forçar NEAREST na textura source pra preservar look pixelado
-            // no downscale, e restaurar pra config do FrameProcessor depois.
+            // no downscale, e restaurar o filtro original depois (o da
+            // FrameProcessor, ou NEAREST pra textura do crop pre-pass).
             // Remote upscale (#209) uses LINEAR, matching the bilinear CPU
             // upscale it replaces.
             const GLint scaleFilter = needsUpscale ? GL_LINEAR : GL_NEAREST;
-            const GLint restoreFilter = m_app.m_frameProcessor->getTextureFilterLinear()
+            const GLint restoreFilter = (shaderSrcTex == m_app.m_frameProcessor->getTexture() &&
+                                         m_app.m_frameProcessor->getTextureFilterLinear())
                                             ? GL_LINEAR
                                             : GL_NEAREST;
             glActiveTexture(GL_TEXTURE0);
@@ -253,11 +567,43 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, scaleFilter);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, scaleFilter);
 
-            m_app.m_renderer->renderTexture(shaderSrcTex,
-                                      fboW, fboH,
-                                      false, false, 1.0f, 1.0f, false,
-                                      shaderSrcW, shaderSrcH,
-                                      /*preserveViewport=*/true);
+            // Downscale filter: NEAREST keeps hard pixel edges and is exact
+            // on whole ratios (2x, 3x); on others (1280x720 -> 640x480 =
+            // 2 x 1.5) it drops source lines unevenly, so the area average
+            // is used there (Auto), or always / never when picked.
+            bool area = false;
+            if (needsDownscale && m_app.m_ui)
+            {
+                const int f = m_app.m_ui->getSourceDownscaleFilter();
+                const bool whole = (shaderSrcW % fboW == 0) && (shaderSrcH % fboH == 0);
+                area = f == 2 || (f == 0 && !whole);
+            }
+            bool drawn = false;
+            if (area)
+            {
+                if (!m_areaDownscaler)
+                    m_areaDownscaler = std::make_unique<AreaDownscaler>();
+                drawn = m_areaDownscaler->render(shaderSrcTex, shaderSrcW, shaderSrcH, fboW, fboH);
+                if (m_downscaleLogged != (drawn ? 2 : 1))
+                {
+                    m_downscaleLogged = drawn ? 2 : 1;
+                    LOG_INFO("Source downscale " + std::to_string(shaderSrcW) + "x" + std::to_string(shaderSrcH) +
+                             " -> " + std::to_string(fboW) + "x" + std::to_string(fboH) +
+                             (drawn ? ": area average" : ": area average unavailable, nearest"));
+                }
+            }
+            else if (needsDownscale && m_downscaleLogged != 3)
+            {
+                m_downscaleLogged = 3;
+                LOG_INFO("Source downscale " + std::to_string(shaderSrcW) + "x" + std::to_string(shaderSrcH) +
+                         " -> " + std::to_string(fboW) + "x" + std::to_string(fboH) + ": nearest");
+            }
+            if (!drawn)
+                m_app.m_renderer->renderTexture(shaderSrcTex,
+                                          fboW, fboH,
+                                          false, false, 1.0f, 1.0f, false,
+                                          shaderSrcW, shaderSrcH,
+                                          /*preserveViewport=*/true);
 
             glBindTexture(GL_TEXTURE_2D, shaderSrcTex);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, restoreFilter);
@@ -270,8 +616,26 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
             shaderSrcH = fboH;
         }
 
+        // #251 — upscaler. Before: the chain runs on the upscaled image.
+        // After: the chain sees the native source and renders at the
+        // largest whole multiple of it that fits the upscale target; the
+        // upscaler then takes the chain's output to the target.
+        const uint32_t nativeW = shaderSrcW, nativeH = shaderSrcH;
+        shaderSrcTex = runUpscaler(UpscalerSettings::Position::Before, shaderSrcTex,
+                                   shaderSrcW, shaderSrcH, nativeW, nativeH);
+        if (m_app.m_upscaler && nativeW > 0 && nativeH > 0 &&
+            UpscalerStage::runsAt(m_upscalerSettings, UpscalerSettings::Position::After))
+        {
+            uint32_t tw = 0, th = 0;
+            upscalerTarget(nativeW, nativeH, tw, th);
+            const uint32_t k = std::max<uint32_t>(1, std::min(tw / nativeW, th / nativeH));
+            m_app.m_shaderEngine->setViewport(nativeW * k, nativeH * k);
+        }
+
         textureToRender = m_app.m_shaderEngine->applyShader(shaderSrcTex, shaderSrcW, shaderSrcH);
         isShaderTexture = true;
+        processedW = m_app.m_shaderEngine->getOutputWidth();
+        processedH = m_app.m_shaderEngine->getOutputHeight();
         
         // Log saída do shader
         static int shaderOutputLogCount = 0;
@@ -287,12 +651,28 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
         // DEBUG: Check returned texture
         if (textureToRender == 0)
         {
-            LOG_WARN("Shader returned invalid texture (0), using original texture");
-            textureToRender = m_app.m_frameProcessor->getTexture();
+            LOG_WARN("Shader returned invalid texture (0), using source texture");
+            textureToRender = sourceTex;
             isShaderTexture = false;
         }
-        else
+        else if (processedW > 0 && processedH > 0)
         {
+            // #251 — upscaler after the chain.
+            textureToRender = runUpscaler(UpscalerSettings::Position::After, textureToRender,
+                                          processedW, processedH, nativeW, nativeH);
+        }
+    }
+    else if (m_upscalerSettings.active() && sourceTex != 0 && sourceW > 0 && sourceH > 0)
+    {
+        // #251 — no shader chain: the upscaler alone (either position).
+        uint32_t w = sourceW, h = sourceH;
+        const GLuint up = runUpscaler(m_upscalerSettings.position, sourceTex, w, h, sourceW, sourceH);
+        if (m_upscalerRan)
+        {
+            textureToRender = up;
+            isShaderTexture = true;
+            processedW = w;
+            processedH = h;
         }
     }
 
@@ -320,7 +700,10 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
         {
             m_app.m_ui->endFrame();
         }
-        m_app.m_window->swapBuffers();
+        {
+            LoopProfiler::Scope prof(LoopProfiler::Swap);
+            m_app.m_window->swapBuffers();
+        }
         return true;
     }
 
@@ -338,15 +721,18 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
 
     // IMPORTANT: For shaders with alpha (like Game Boy), don't clear with opaque black
     // Clear with transparent black so blending works correctly
-    if (isShaderTexture)
+    if (spec.window)
     {
-        glClearColor(0.0f, 0.0f, 0.0f, 0.0f); // Transparent for shaders with alpha
+        if (isShaderTexture)
+        {
+            glClearColor(0.0f, 0.0f, 0.0f, 0.0f); // Transparent for shaders with alpha
+        }
+        else
+        {
+            glClearColor(0.0f, 0.0f, 0.0f, 1.0f); // Opaque for normal capture
+        }
+        glClear(GL_COLOR_BUFFER_BIT);
     }
-    else
-    {
-        glClearColor(0.0f, 0.0f, 0.0f, 1.0f); // Opaque for normal capture
-    }
-    glClear(GL_COLOR_BUFFER_BIT);
 
     // For shader textures (framebuffer), invert Y (shader renders inverted)
     // For original texture (camera), don't invert Y (already correct)
@@ -365,9 +751,9 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
     }
     else if (isShaderTexture)
     {
-        // Without maintainAspect, use shader output dimensions
-        renderWidth = m_app.m_shaderEngine->getOutputWidth();
-        renderHeight = m_app.m_shaderEngine->getOutputHeight();
+        // Without maintainAspect, use shader (/ upscaler, #251) output dimensions
+        renderWidth = processedW;
+        renderHeight = processedH;
         if (renderWidth == 0 || renderHeight == 0)
         {
             LOG_WARN("Shader output dimensions invalid (0x0), using capture dimensions");
@@ -554,48 +940,70 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
     // Calculate viewport where capture will be rendered (may be smaller than window if maintainAspect is active)
     uint32_t windowWidth = m_app.m_window->getWidth();
     uint32_t windowHeight = m_app.m_window->getHeight();
-    GLint viewportX = 0;
-    GLint viewportY = 0;
-    GLsizei viewportWidth = windowWidth;
-    GLsizei viewportHeight = windowHeight;
 
-    if (m_app.m_maintainAspect && finalRenderWidth > 0 && finalRenderHeight > 0)
-    {
-        // Calculate texture and window aspect ratio (same as renderTexture)
-        float textureAspect = static_cast<float>(finalRenderWidth) / static_cast<float>(finalRenderHeight);
-        float windowAspect = static_cast<float>(windowWidth) / static_cast<float>(windowHeight);
+    // #227 — output geometry: integer scaling / aspect override pick the
+    // window rect, rotation / mirror go in as a texcoord transform. With
+    // the defaults this is the previous maintain-aspect fit (or stretch).
+    const OutputGeometry geom = m_app.m_ui ? m_app.m_ui->getOutputGeometry() : OutputGeometry();
+    const OutputGeometry::Rect winRect =
+        geom.windowRect(finalRenderWidth, finalRenderHeight,
+                        static_cast<int>(windowWidth), static_cast<int>(windowHeight),
+                        m_app.m_maintainAspect);
+    GLint viewportX = winRect.x;
+    GLint viewportY = winRect.y;
+    GLsizei viewportWidth = winRect.w;
+    GLsizei viewportHeight = winRect.h;
 
-        if (textureAspect > windowAspect)
-        {
-            // Texture is wider: adjust height (letterboxing)
-            viewportHeight = static_cast<GLsizei>(windowWidth / textureAspect);
-            viewportY = (windowHeight - viewportHeight) / 2;
-        }
-        else
-        {
-            // Texture is taller: adjust width (pillarboxing)
-            viewportWidth = static_cast<GLsizei>(windowHeight * textureAspect);
-            viewportX = (windowWidth - viewportWidth) / 2;
-        }
-    }
-
+    // #247 — only the pass that owns the window draws it (the body keeps
+    // its original indentation to keep the diff small).
+    if (spec.window) {
     // IMPORTANTE: Garantir que estamos renderizando no framebuffer padrão (janela)
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-    // Renderizar textura final na janela (sempre preenche a janela completamente).
+    // Integer scaling is about pixel-exact presentation: sample the final
+    // texture with NEAREST for this one draw and restore its filter after.
+    const bool nearestPresent = geom.integerScale != OutputGeometry::IntegerScale::Off;
+    GLint prevMinFilter = GL_LINEAR, prevMagFilter = GL_LINEAR;
+    if (nearestPresent)
+    {
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, finalTexture);
+        if (glGetTexParameteriv)
+        {
+            glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, &prevMinFilter);
+            glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, &prevMagFilter);
+        }
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    }
+    if (geom.hasOrientation())
+    {
+        float uv[4];
+        geom.uvMatrix(/*yDown=*/false, uv);
+        m_app.m_renderer->setUVTransform(uv);
+    }
+
+    // Renderizar textura final na janela.
     // enableBlend=false pelo mesmo motivo do resize acima.
-    m_app.m_renderer->renderTexture(finalTexture, m_app.m_window->getWidth(), m_app.m_window->getHeight(),
+    glViewport(viewportX, viewportY, viewportWidth, viewportHeight);
+    m_app.m_renderer->renderTexture(finalTexture, windowWidth, windowHeight,
                               shouldFlipY, false, m_app.m_brightness, m_app.m_contrast,
-                              m_app.m_maintainAspect, finalRenderWidth, finalRenderHeight);
+                              false, finalRenderWidth, finalRenderHeight,
+                              /*preserveViewport=*/true);
+
+    m_app.m_renderer->resetUVTransform();
+    if (nearestPresent)
+    {
+        glBindTexture(GL_TEXTURE_2D, finalTexture);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, prevMinFilter);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, prevMagFilter);
+        glBindTexture(GL_TEXTURE_2D, 0);
+    }
+    } // spec.window
 
     // IMPORTANTE: Para streaming e recording, capturar diretamente da textura final ao invés do framebuffer
     // Isso evita problemas com back/front buffer e garante que capturamos a imagem renderizada
-    bool needsFrameCapture = (m_app.m_streamManager && m_app.m_streamManager->isActive()) ||
-                            (m_app.m_recordingManager && m_app.m_recordingManager->isRecording())
-#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
-                            || (m_app.m_virtcam && m_app.m_virtcam->isRunning())
-#endif
-                            ;
+    bool needsFrameCapture = passStream || passRaw || passRecord || passVirtcam;
 
     // Log para debug: verificar tamanho da textura final antes da captura
     static int finalTextureSizeLogCount = 0;
@@ -616,8 +1024,7 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
         // #198 — the captured frame currently on screen. Synchronous
         // readbacks are of this frame; the async PBO one is of the frame
         // read back on the previous call (see m_pboInFlight).
-        const FrameMeta curMeta{m_app.m_frameProcessor ? m_app.m_frameProcessor->getFrameSeq() : 0,
-                                m_app.m_frameProcessor ? m_app.m_frameProcessor->getFrameTimestampUs() : 0};
+        const FrameMeta curMeta = spec.meta;
 
         // Capturar do viewport (o que está sendo renderizado)
         uint32_t captureWidth = static_cast<uint32_t>(viewportWidth);
@@ -672,12 +1079,7 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                 // IMPORTANTE: Se há resolução de saída configurada, usar finalTexture
                 // Se não há resolução de saída mas há shader, usar textureToRender com dimensões do shader
                 // Isso garante que capturamos a textura completa processada tanto para streaming quanto para gravação
-                bool needsFrameCapture = (m_app.m_recordingManager && m_app.m_recordingManager->isRecording()) ||
-                                        (m_app.m_streamManager && m_app.m_streamManager->isActive())
-#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
-                                        || (m_app.m_virtcam && m_app.m_virtcam->isRunning())
-#endif
-                                        ;
+                bool needsFrameCapture = passRecord || passStream || passRaw || passVirtcam;
                 
                 if (needsFrameCapture)
                 {
@@ -695,8 +1097,8 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                     {
                         // Sem resolução de saída, mas com shader: usar textureToRender com dimensões reais do shader
                         textureToCapture = textureToRender;
-                        captureTextureWidth = m_app.m_shaderEngine->getOutputWidth();
-                        captureTextureHeight = m_app.m_shaderEngine->getOutputHeight();
+                        captureTextureWidth = processedW;
+                        captureTextureHeight = processedH;
                         
                         // Se dimensões do shader são inválidas, usar renderWidth/renderHeight
                         if (captureTextureWidth == 0 || captureTextureHeight == 0)
@@ -762,19 +1164,57 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                 // + streamed frames all reflect the un-adjusted
                 // image — user tweaks brightness expecting it
                 // to land in OBS and it doesn't.
+                //
+                // #227 — the same pass applies the output geometry
+                // (aspect override, rotation / mirror). The image is
+                // fitted into a canvas of the size the encoder will
+                // resize to (output resolution, else the stream /
+                // recording size), so the encoder's plain resize keeps
+                // the rotated / re-aspected image undistorted. Integer
+                // scaling is window-only and never reaches here.
                 static GLuint postImageFBO     = 0;
                 static GLuint postImageTex     = 0;
                 static uint32_t postImageW     = 0;
                 static uint32_t postImageH     = 0;
+                const bool geomActive = geom.affectsOutputs();
                 const bool postImageActive =
-                    (m_app.m_brightness != 1.0f) || (m_app.m_contrast != 1.0f);
+                    (m_app.m_brightness != 1.0f) || (m_app.m_contrast != 1.0f) || geomActive;
+
+                uint32_t passW = captureTextureWidth;
+                uint32_t passH = captureTextureHeight;
+                OutputGeometry::Rect passRect;
+                passRect.w = static_cast<int>(passW);
+                passRect.h = static_cast<int>(passH);
+                if (geomActive)
+                {
+                    uint32_t targetW = 0, targetH = 0;
+                    if (m_app.m_outputWidth > 0 && m_app.m_outputHeight > 0)
+                    {
+                        targetW = m_app.m_outputWidth;
+                        targetH = m_app.m_outputHeight;
+                    }
+                    else if (m_app.m_streamManager && m_app.m_streamManager->isActive() &&
+                             m_app.m_streamingWidth > 0 && m_app.m_streamingHeight > 0)
+                    {
+                        targetW = m_app.m_streamingWidth;
+                        targetH = m_app.m_streamingHeight;
+                    }
+                    else if (m_app.m_recordingManager && m_app.m_recordingManager->isRecording())
+                    {
+                        const RecordingSettings rs = m_app.m_recordingManager->getRecordingSettings();
+                        targetW = rs.width;
+                        targetH = rs.height;
+                    }
+                    geom.outputCanvas(finalRenderWidth, finalRenderHeight, targetW, targetH,
+                                      passW, passH, passRect);
+                }
 
                 GLuint fboTextureToAttach = textureToCapture;
                 if (postImageActive)
                 {
                     if (postImageFBO == 0 || postImageTex == 0 ||
-                        postImageW != captureTextureWidth ||
-                        postImageH != captureTextureHeight)
+                        postImageW != passW ||
+                        postImageH != passH)
                     {
                         if (postImageFBO) glDeleteFramebuffers(1, &postImageFBO);
                         if (postImageTex) glDeleteTextures(1, &postImageTex);
@@ -782,8 +1222,8 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                         glGenTextures(1, &postImageTex);
                         glBindTexture(GL_TEXTURE_2D, postImageTex);
                         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA,
-                                     captureTextureWidth,
-                                     captureTextureHeight, 0,
+                                     passW,
+                                     passH, 0,
                                      GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
                         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
                         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -803,8 +1243,8 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                         }
                         else
                         {
-                            postImageW = captureTextureWidth;
-                            postImageH = captureTextureHeight;
+                            postImageW = passW;
+                            postImageH = passH;
                         }
                     }
                     if (postImageFBO && postImageTex)
@@ -813,6 +1253,18 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                         glViewport(0, 0, postImageW, postImageH);
                         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
                         glClear(GL_COLOR_BUFFER_BIT);
+                        glViewport(passRect.x, passRect.y, passRect.w, passRect.h);
+                        if (geom.hasOrientation())
+                        {
+                            // The read-back is consumed top-down (row 0
+                            // = image top), so this FBO's visual space is
+                            // y-down, except for a Remote frame, which is
+                            // stored the other way round and flipped on
+                            // read-back (#210).
+                            float uv[4];
+                            geom.uvMatrix(/*yDown=*/!remoteSource, uv);
+                            m_app.m_renderer->setUVTransform(uv);
+                        }
                         m_app.m_renderer->renderTexture(
                             textureToCapture,
                             postImageW, postImageH,
@@ -821,7 +1273,10 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                             /*maintainAspect=*/false,
                             captureTextureWidth, captureTextureHeight,
                             /*preserveViewport=*/true);
+                        m_app.m_renderer->resetUVTransform();
                         fboTextureToAttach = postImageTex;
+                        captureTextureWidth = postImageW;
+                        captureTextureHeight = postImageH;
                         // Re-bind the original captureFBO so the
                         // attach-and-read below operates on it
                         // unchanged.
@@ -881,14 +1336,12 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                         // "push throttle skips=20-24/s" while the encoder sat
                         // idle waiting for input).
                         // #198 — once per captured frame, with its capture time.
-                        if (m_app.m_streamManager && m_app.m_streamManager->isActive() &&
-                            curMeta.seq != m_lastStreamSeq)
+                        if (passStream && curMeta.streamOk && curMeta.seq != m_lastStreamSeq)
                         {
                             m_lastStreamSeq = curMeta.seq;
                             m_app.m_streamManager->pushFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight, curMeta.tsUs);
                         }
-                        if (m_app.m_recordingManager && m_app.m_recordingManager->isRecording() &&
-                            curMeta.seq != m_lastRecordSeq)
+                        if (passRecord && curMeta.recordOk && curMeta.seq != m_lastRecordSeq)
                         {
                             m_lastRecordSeq = curMeta.seq;
                             m_app.m_recordingManager->pushFrame(frameData.data(), actualCaptureWidth, actualCaptureHeight, curMeta.tsUs);
@@ -903,7 +1356,9 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                         // Master pipeline toggle off → applyShader was skipped above and
                         // textureToCapture is the source RGB texture, so treat as RGB.
                         const bool pipelineEnabled = (!m_app.m_ui || m_app.m_ui->getShaderPipelineEnabled());
-                        bool isShaderTexture = (pipelineEnabled && m_app.m_shaderEngine && m_app.m_shaderEngine->isShaderActive());
+                        // #251 — the upscaler's output is RGBA too.
+                        bool isShaderTexture = (pipelineEnabled && m_app.m_shaderEngine && m_app.m_shaderEngine->isShaderActive()) ||
+                                               m_upscalerRan;
                         // #85 — When the post-image render pass
                         // ran above, what's attached to captureFBO
                         // is RGBA regardless of source. Otherwise
@@ -997,19 +1452,19 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                         else             allowPBO = true;
 #endif
                     }
-                    bool useAsyncPBO = (allowPBO && m_app.m_pboManager &&
-                                        m_app.m_pboManager->init(textureWidth, textureHeight, readFormat) &&
-                                        m_app.m_pboManager->isInitialized());
+                    bool useAsyncPBO = (allowPBO && pbo &&
+                                        pbo->init(textureWidth, textureHeight, readFormat) &&
+                                        pbo->isInitialized());
 
                     if (useAsyncPBO)
                     {
                         // #198 — getReadData() below returns the readback
                         // started on the previous call: label it with the
                         // frame that readback was of.
-                        dataMeta = m_pboInFlight;
-                        m_pboInFlight = curMeta;
+                        dataMeta = pboInFlight;
+                        pboInFlight = curMeta;
                         // Agenda glReadPixels no PBO (não bloqueia).
-                        m_app.m_pboManager->startAsyncRead(0, 0,
+                        pbo->startAsyncRead(0, 0,
                                                      static_cast<GLsizei>(textureWidth),
                                                      static_cast<GLsizei>(textureHeight));
 
@@ -1026,7 +1481,7 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                             // (shouldFlipY): a remote frame arrives in the
                             // opposite orientation, so flip it here too or
                             // client recordings / virtcam are upside-down.
-                            frameDataReady = m_app.m_pboManager->getReadData(
+                            frameDataReady = pbo->getReadData(
                                 frameData.data(), textureWidth, textureHeight, /*flipY=*/remoteSource);
                             // #85 — Virtual camera also gets fed from
                             // the RGB path (no-shader / direct capture
@@ -1036,8 +1491,7 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                             // shader is off, which was the symptom
                             // user hit on first end-to-end test.
 #if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
-                            if (frameDataReady && m_app.m_virtcam &&
-                                m_app.m_virtcam->isRunning())
+                            if (frameDataReady && passVirtcam)
                             {
                                 m_app.m_virtcam->pushFrame(
                                     frameData.data(),
@@ -1051,7 +1505,7 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                             auto &rgbaData = m_app.m_captureRgbaScratch;
                             rgbaData.resize(static_cast<size_t>(textureWidth) *
                                             static_cast<size_t>(textureHeight) * 4);
-                            if (m_app.m_pboManager->getReadData(rgbaData.data(),
+                            if (pbo->getReadData(rgbaData.data(),
                                                           textureWidth, textureHeight,
                                                           /*flipY=*/remoteSource)) // #210
                             {
@@ -1061,7 +1515,7 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                                 // below so the sink keeps the alpha
                                 // channel intact (sws RGBA → YUYV).
 #if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
-                                if (m_app.m_virtcam && m_app.m_virtcam->isRunning())
+                                if (passVirtcam)
                                 {
                                     m_app.m_virtcam->pushFrame(
                                         rgbaData.data(),
@@ -1169,31 +1623,37 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
 
                         // Per-pipeline shader override: when the master is on AND
                         // the shader is active, individual pipelines can request the
-                        // raw pre-shader source instead. We do a sync readback of
-                        // m_frameProcessor->getTexture() (raw V4L2 RGB upload) only
+                        // pre-shader source instead. We do a sync readback of the
+                        // source pre-pass texture (the capture upload, cropped by
+                        // the source crop when one is set — #224) only
                         // when at least one active pipeline asked for it — keeps the
                         // common case (both pipelines follow the master) on the fast
                         // single-readback path.
                         const bool masterOn = (m_app.m_ui && m_app.m_ui->getShaderPipelineEnabled());
                         const bool shaderActive = (m_app.m_shaderEngine && m_app.m_shaderEngine->isShaderActive());
-                        const bool streamWantsSource = m_app.m_ui && m_app.m_streamManager && m_app.m_streamManager->isActive() &&
+                        // #251 — the output is processed (shader chain and / or the
+                        // upscaler): /raw and an apply-shader-off stream / recording
+                        // then need the separate pre-shader source readback.
+                        const bool processed = (masterOn && shaderActive) || m_upscalerRan;
+                        const bool streamWantsSource = m_app.m_ui && passStream &&
                                                        !m_app.m_ui->getStreamingApplyShader();
-                        const bool recordWantsSource = m_app.m_ui && m_app.m_recordingManager && m_app.m_recordingManager->isRecording() &&
+                        const bool recordWantsSource = m_app.m_ui && passRecord &&
                                                        !m_app.m_ui->getRecordingApplyShader();
                         // Phase 2 of #47: /raw is by-contract pre-shader, so any connected
                         // /raw client also triggers the source-frame capture below.
-                        const bool rawWantsSource = m_app.m_streamManager && m_app.m_streamManager->isActive() &&
-                                                    m_app.m_streamManager->hasRawClients();
-                        const bool needSourceCapture = masterOn && shaderActive &&
+                        const bool rawWantsSource = passRaw && m_app.m_streamManager->hasRawClients();
+                        const bool needSourceCapture = processed &&
                                                        (streamWantsSource || recordWantsSource || rawWantsSource);
 
                         bool sourceFrameReady = false;
                         uint32_t sourceFrameW = 0, sourceFrameH = 0;
                         if (needSourceCapture && m_app.m_frameProcessor)
                         {
-                            GLuint srcTex = m_app.m_frameProcessor->getTexture();
-                            sourceFrameW = m_app.m_frameProcessor->getTextureWidth();
-                            sourceFrameH = m_app.m_frameProcessor->getTextureHeight();
+                            // #224 — /raw carries the source crop: read the
+                            // pre-pass texture, not the raw capture texture.
+                            GLuint srcTex = sourceTex;
+                            sourceFrameW = sourceW;
+                            sourceFrameH = sourceH;
                             if (srcTex && sourceFrameW > 0 && sourceFrameH > 0)
                             {
                                 GLuint tmpFBO = 0;
@@ -1243,7 +1703,7 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                         // time jittered slightly below 1/fps — visible in the log as
                         // "push throttle: pushes=37/s skips=24/s" while VAAPI sat idle
                         // waiting for input.
-                        if (frameDataReady && m_app.m_streamManager && m_app.m_streamManager->isActive())
+                        if (frameDataReady && (passStream || passRaw))
                         {
                             const bool useSource = streamWantsSource && sourceFrameReady;
                             static int streamPushLogCount = 0;
@@ -1273,7 +1733,8 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                             // synchronous → current frame; frameData may be
                             // the previous frame on the async PBO path).
                             const FrameMeta streamMeta = useSource ? curMeta : dataMeta;
-                            if (m_app.m_streamManager->hasClients() && streamMeta.seq != m_lastStreamSeq)
+                            if (passStream && streamMeta.streamOk && m_app.m_streamManager->hasClients() &&
+                                streamMeta.seq != m_lastStreamSeq)
                             {
                                 m_lastStreamSeq = streamMeta.seq;
                                 if (useSource)
@@ -1302,14 +1763,14 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                             //     disabling the shader from the UI silently kills
                             //     /raw transmission (#67 — client log showed video
                             //     stop while audio kept flowing).
-                            if (m_app.m_streamManager->hasRawClients())
+                            if (passRaw && m_app.m_streamManager->hasRawClients())
                             {
                                 if (sourceFrameReady && curMeta.seq != m_lastRawSeq)
                                 {
                                     m_lastRawSeq = curMeta.seq;
                                     m_app.m_streamManager->pushRawFrame(m_app.m_captureSourceFrameData.data(), sourceFrameW, sourceFrameH, curMeta.tsUs);
                                 }
-                                else if (!sourceFrameReady && (!masterOn || !shaderActive) &&
+                                else if (!sourceFrameReady && !processed &&
                                          dataMeta.seq != m_lastRawSeq)
                                 {
                                     m_lastRawSeq = dataMeta.seq;
@@ -1317,7 +1778,7 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                                 }
                             }
                         }
-                        if (frameDataReady && m_app.m_recordingManager && m_app.m_recordingManager->isRecording())
+                        if (frameDataReady && passRecord)
                         {
                             const bool useSource = recordWantsSource && sourceFrameReady;
                             static int recordingPushLogCount = 0;
@@ -1331,7 +1792,7 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
                                 LOG_DEBUG("===================================");
                             }
                             const FrameMeta recordMeta = useSource ? curMeta : dataMeta;
-                            if (recordMeta.seq != m_lastRecordSeq)
+                            if (recordMeta.recordOk && recordMeta.seq != m_lastRecordSeq)
                             {
                                 m_lastRecordSeq = recordMeta.seq;
                                 if (useSource)
@@ -1348,7 +1809,11 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
             } // fim do else (FBO completo)
         } // fim do if (needsFrameCapture)
     } // fim do if (captureDataSize > 0)
+    return false;
+}
 
+bool FrameCapturePipeline::finishFrame()
+{
     auto streamManager = m_app.m_streamManager.get();
     if (m_app.m_ui && streamManager && streamManager->isActive())
     {
@@ -1420,6 +1885,47 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
         }
     }
 
+    // #226 — counters for the FPS overlay. Cheap reads (atomics + a
+    // couple of streamer flags); the overlay derives the rates.
+    if (m_app.m_ui)
+    {
+        PerfCounters pc;
+        if (m_app.m_frameProcessor)
+        {
+            pc.captureSeq  = m_app.m_frameProcessor->getFrameSeq();
+            pc.captureTsUs = m_app.m_frameProcessor->getFrameTimestampUs();
+        }
+        const bool remote = m_app.m_ui->getSourceType() == UIManager::SourceType::Remote;
+        pc.captureNominalFps = static_cast<float>(remote ? m_app.m_remoteSourceFps
+                                                         : m_app.m_ui->getCaptureFps());
+        if (streamManager && streamManager->isActive())
+        {
+            pc.streamActive  = streamManager->hasClients();
+            pc.streamEncoded = streamManager->getStreamVideoFramesEncoded();
+            pc.rawActive     = streamManager->hasRawClients();
+            pc.rawEncoded    = streamManager->getRawVideoFramesEncoded();
+        }
+        if (m_app.m_recordingManager)
+        {
+            pc.recordActive  = m_app.m_recordingManager->isRecording();
+            pc.recordEncoded = m_app.m_recordingManager->getVideoFramesEncoded();
+        }
+        // #247 — output timeline, real vs generated.
+        if (m_frameGen)
+        {
+            const FrameGenClock &clk = m_frameGen->clock();
+            pc.genActive    = m_frameGen->isActive();
+            pc.genReal      = clk.realEmitted();
+            pc.genGenerated = clk.generatedEmitted();
+            pc.genDropped   = clk.dropped();
+            const UIManager::FrameGenStatus st = m_app.m_ui->getFrameGenStatus();
+            pc.genTargetFps = st.outputFps;
+            pc.genSourceFps = st.sourceFps;
+            pc.genRepeats   = st.repeatsSkipped;
+        }
+        m_app.m_ui->setPerfCounters(pc);
+    }
+
     // Render UI (after capturing capture area)
     if (m_app.m_ui)
     {
@@ -1432,7 +1938,10 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
     // Check if window is still valid before swapping
     if (m_app.m_window && !m_app.m_window->shouldClose())
     {
-        m_app.m_window->swapBuffers();
+        {
+            LoopProfiler::Scope prof(LoopProfiler::Swap);
+            m_app.m_window->swapBuffers();
+        }
     }
 
     // Pacing policy:

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(RetroCapture VERSION 0.9.1 LANGUAGES CXX)
+project(RetroCapture VERSION 0.10.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -651,6 +651,79 @@ elseif(PLATFORM_MACOS)
     list(FILTER SOURCES EXCLUDE REGEX ".*/WindowManagerSDL\\.cpp$")
 endif()
 
+# ---------------------------------------------------------------------
+# #248 — RIFE frame generation ("quality" method): ncnn + Vulkan.
+#
+# Optional. Needs an ncnn build with NCNN_VULKAN (the Docker build images
+# build a pinned release with tools/build-ncnn.sh; elsewhere point
+# RIFE_NCNN_DIR / CMAKE_PREFIX_PATH at one). ncnn loads the Vulkan loader
+# at run time (NCNN_SIMPLEVK), so there is no Vulkan link dependency. When
+# ncnn is not found the app still builds: the RIFE method then reports
+# "no RIFE support in this build" and frames are generated with Motion.
+#
+# The model (RIFE 4.6, ~10 MB) is downloaded at configure time from a
+# pinned rife-ncnn-vulkan commit and checked against its SHA-256, or taken
+# from RIFE_MODEL_DIR (offline builds). Licenses: assets/licenses/.
+# ---------------------------------------------------------------------
+option(ENABLE_RIFE "RIFE neural frame generation (ncnn + Vulkan)" ON)
+set(RIFE_NCNN_DIR "" CACHE PATH "Install prefix of an ncnn build with NCNN_VULKAN=ON")
+set(RIFE_MODEL_DIR "" CACHE PATH "Directory with the rife-v4.6 flownet.param/flownet.bin (skips the download)")
+set(RIFE_ENABLED OFF)
+if(ENABLE_RIFE)
+    set(_rc_ncnn_hints /opt/ncnn)
+    if(RIFE_NCNN_DIR)
+        list(INSERT _rc_ncnn_hints 0 "${RIFE_NCNN_DIR}")
+    endif()
+    find_package(ncnn CONFIG QUIET HINTS ${_rc_ncnn_hints}
+                 PATH_SUFFIXES lib/cmake/ncnn)
+    if(ncnn_FOUND AND NCNN_VULKAN)
+        set(RIFE_ENABLED ON)
+        message(STATUS "RIFE frame generation: ENABLED (ncnn ${NCNN_VERSION}, Vulkan)")
+    elseif(ncnn_FOUND)
+        message(WARNING "RIFE frame generation: DISABLED (ncnn was built without NCNN_VULKAN)")
+    else()
+        message(STATUS "RIFE frame generation: DISABLED (ncnn not found; set RIFE_NCNN_DIR, "
+                       "see tools/build-ncnn.sh). The RIFE method falls back to Motion.")
+    endif()
+endif()
+if(NOT RIFE_ENABLED)
+    list(FILTER SOURCES EXCLUDE REGEX ".*/rife/RifeEngine\\.(cpp|h)$")
+endif()
+
+set(RIFE_MODEL_NAME "rife-v4.6")
+set(RIFE_MODEL_OUT "${CMAKE_BINARY_DIR}/rife-models/${RIFE_MODEL_NAME}")
+if(RIFE_ENABLED)
+    if(RIFE_MODEL_DIR)
+        file(MAKE_DIRECTORY "${RIFE_MODEL_OUT}")
+        foreach(_f flownet.param flownet.bin)
+            file(COPY "${RIFE_MODEL_DIR}/${_f}" DESTINATION "${RIFE_MODEL_OUT}")
+        endforeach()
+    else()
+        set(_rife_url "https://raw.githubusercontent.com/nihui/rife-ncnn-vulkan/a7532fc3f9f8f008cd6eecd6f2ffe2a9698e0cf7/models/${RIFE_MODEL_NAME}")
+        set(_rife_flownet.param_sha256 724569596bcd1e7b9fa50455c604777ebed99746d2ef40aa86e31b5725f1053c)
+        set(_rife_flownet.bin_sha256 f334ed2260149ce0188a6dcf049844e8b0cdd912e01cbcfb63553157d2508958)
+        foreach(_f flownet.param flownet.bin)
+            set(_dst "${RIFE_MODEL_OUT}/${_f}")
+            set(_sum "")
+            if(EXISTS "${_dst}")
+                file(SHA256 "${_dst}" _sum)
+            endif()
+            if(NOT _sum STREQUAL "${_rife_${_f}_sha256}")
+                message(STATUS "Downloading RIFE model: ${_f}")
+                file(DOWNLOAD "${_rife_url}/${_f}" "${_dst}"
+                     EXPECTED_HASH SHA256=${_rife_${_f}_sha256}
+                     STATUS _st TLS_VERIFY ON)
+                list(GET _st 0 _code)
+                if(NOT _code EQUAL 0)
+                    file(REMOVE "${_dst}")
+                    message(WARNING "RIFE model download failed (${_st}); the RIFE method will report "
+                                    "the missing model at run time. Set RIFE_MODEL_DIR for offline builds.")
+                endif()
+            endif()
+        endforeach()
+    endif()
+endif()
+
 # macOS: pkg-config hands back bare library names (png16, avcodec, ...) for
 # the Homebrew packages. On Intel the Homebrew prefix (/usr/local/lib) is a
 # default linker path, on Apple Silicon (/opt/homebrew/lib) it isn't, so the
@@ -882,6 +955,12 @@ target_link_libraries(retrocapture PRIVATE ${LINK_LIBS})
 # already require. Linked PRIVATE because the public headers don't
 # expose IXWebSocket types.
 target_link_libraries(retrocapture PRIVATE ixwebsocket)
+
+# #248 — RIFE (see the ENABLE_RIFE block above).
+if(RIFE_ENABLED)
+    target_link_libraries(retrocapture PRIVATE ncnn)
+    target_compile_definitions(retrocapture PRIVATE RETROCAPTURE_RIFE)
+endif()
 
 # macOS-specific frameworks (need -framework syntax)
 if(PLATFORM_MACOS)
@@ -1122,6 +1201,18 @@ add_custom_command(TARGET retrocapture POST_BUILD
     COMMENT "Copying assets directory to build output"
 )
 
+# #248 — the RIFE model next to the other assets (bin/assets/models/...);
+# packaging scripts pick it up from there.
+if(RIFE_ENABLED AND EXISTS "${RIFE_MODEL_OUT}/flownet.bin")
+    add_custom_command(TARGET retrocapture POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/assets/models"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_BINARY_DIR}/rife-models"
+        "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/assets/models"
+        COMMENT "Copying the RIFE model to build output"
+    )
+endif()
+
 # Copiar certificados placeholder da raiz para ssl/ se existirem
 # Isso permite ter certificados de exemplo ou placeholder na raiz do projeto
 # que serão copiados para a pasta ssl/ no diretório de build
@@ -1314,6 +1405,12 @@ if(PLATFORM_WINDOWS)
         COMPONENT shaders
         FILES_MATCHING PATTERN "*"
     )
+    # #251 — built-in upscaler passes (not in the user shader browser).
+    install(DIRECTORY "${CMAKE_SOURCE_DIR}/shaders/internal"
+        DESTINATION share/retrocapture/shaders
+        COMPONENT shaders
+        FILES_MATCHING PATTERN "*"
+    )
 
     # Assets (logo, etc.)
     if(EXISTS "${CMAKE_SOURCE_DIR}/assets")
@@ -1321,6 +1418,14 @@ if(PLATFORM_WINDOWS)
             DESTINATION share/retrocapture
             COMPONENT assets
             FILES_MATCHING PATTERN "*"
+        )
+    endif()
+
+    # #248 — RIFE model (<install>/share/retrocapture/assets/models/...)
+    if(RIFE_ENABLED AND EXISTS "${RIFE_MODEL_OUT}/flownet.bin")
+        install(DIRECTORY "${CMAKE_BINARY_DIR}/rife-models/"
+            DESTINATION share/retrocapture/assets/models
+            COMPONENT assets
         )
     endif()
 
@@ -1366,11 +1471,25 @@ else()
             FILES_MATCHING PATTERN "*"
         )
     endif()
+    # #251 — built-in upscaler passes (not in the user shader browser).
+    if(EXISTS "${CMAKE_SOURCE_DIR}/shaders/internal")
+        install(DIRECTORY "${CMAKE_SOURCE_DIR}/shaders/internal"
+            DESTINATION share/retrocapture/shaders
+            FILES_MATCHING PATTERN "*"
+        )
+    endif()
 
     if(EXISTS "${CMAKE_SOURCE_DIR}/assets")
         install(DIRECTORY "${CMAKE_SOURCE_DIR}/assets/"
             DESTINATION share/retrocapture
             FILES_MATCHING PATTERN "*"
+        )
+    endif()
+
+    # #248 — RIFE model (assets/ is flattened here: share/retrocapture/models)
+    if(RIFE_ENABLED AND EXISTS "${RIFE_MODEL_OUT}/flownet.bin")
+        install(DIRECTORY "${CMAKE_BINARY_DIR}/rife-models/"
+            DESTINATION share/retrocapture/models
         )
     endif()
 

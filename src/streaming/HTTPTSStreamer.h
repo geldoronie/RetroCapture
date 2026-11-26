@@ -65,6 +65,11 @@ public:
     uint32_t getRawClientCount() const { return m_rawClientCount.load(); }
     bool hasRawClients() const { return m_rawClientCount.load() > 0; }
 
+    // #226 — monotonic count of video frames accepted by the /stream and
+    // /raw encoders. The FPS overlay diffs them once per second.
+    uint64_t getStreamVideoFramesEncoded() const { return m_streamVideoEncodedTotal.load(std::memory_order_relaxed); }
+    uint64_t getRawVideoFramesEncoded() const { return m_rawVideoEncodedTotal.load(std::memory_order_relaxed); }
+
     // /stream-only subscriber count. getClientCount() above deliberately
     // combines /stream + /raw for the audience display (#68); this counts
     // ONLY the MPEG-TS /stream viewers. Used to gate the shader-processed
@@ -400,6 +405,9 @@ private:
     std::mutex m_rawHeaderMutex; // Proteger m_rawFormatHeader
 
     std::atomic<uint32_t> m_rawClientCount{0};
+    // #226 — encoder frame counters (written by the encoding threads).
+    std::atomic<uint64_t> m_streamVideoEncodedTotal{0};
+    std::atomic<uint64_t> m_rawVideoEncodedTotal{0};
     std::vector<int>      m_rawClientSockets;
     std::unordered_map<int, ClientPending> m_rawClientPending; // same semantics as m_clientPending
 

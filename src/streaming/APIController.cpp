@@ -74,6 +74,64 @@ namespace
         return "\"" + jsonEscape(str) + "\"";
     }
 
+    // #229 — deinterlace wire names (UIManager stores ints).
+    const char *deinterlaceModeName(int mode)
+    {
+        switch (mode)
+        {
+        case 1: return "bob";
+        case 2: return "weave";
+        case 3: return "blend";
+        default: return "off";
+        }
+    }
+
+    int deinterlaceModeFromName(const std::string &name)
+    {
+        if (name == "off") return 0;
+        if (name == "bob") return 1;
+        if (name == "weave") return 2;
+        if (name == "blend") return 3;
+        return -1;
+    }
+
+    const char *fieldOrderName(int order)
+    {
+        switch (order)
+        {
+        case 1: return "tff";
+        case 2: return "bff";
+        default: return "auto";
+        }
+    }
+
+    int fieldOrderFromName(const std::string &name)
+    {
+        if (name == "auto") return 0;
+        if (name == "tff") return 1;
+        if (name == "bff") return 2;
+        return -1;
+    }
+
+    // #228 — colour range wire names (UIManager stores 0/1/2).
+    const char *colorRangeName(int range)
+    {
+        switch (range)
+        {
+        case 1: return "limited";
+        case 2: return "full";
+        default: return "auto";
+        }
+    }
+
+    int colorRangeFromName(const std::string &name)
+    {
+        if (name == "auto") return 0;
+        if (name == "limited") return 1;
+        if (name == "full") return 2;
+        return -1;
+    }
+
     std::string jsonNumber(int value)
     {
         return std::to_string(value);
@@ -502,6 +560,16 @@ bool APIController::routeGETSource(int clientFd, const std::string &path, bool &
         result = handleGETSourceOverscan(clientFd);
         return true;
     }
+    if (path == "/api/v1/source/deinterlace")
+    {
+        result = handleGETSourceDeinterlace(clientFd);
+        return true;
+    }
+    if (path == "/api/v1/frame-generation")
+    {
+        result = handleGETFrameGeneration(clientFd);
+        return true;
+    }
     return false;
 }
 
@@ -540,6 +608,11 @@ bool APIController::routeGETCapture(int clientFd, const std::string &path, bool 
     if (path == "/api/v1/image/settings")
     {
         result = handleGETImageSettings(clientFd);
+        return true;
+    }
+    if (path == "/api/v1/stats/fps")
+    {
+        result = handleGETFpsStats(clientFd);
         return true;
     }
     return false;
@@ -711,6 +784,21 @@ bool APIController::routePOSTSource(int clientFd, const std::string &path, const
     if (path == "/api/v1/source/overscan")
     {
         result = handleSetSourceOverscan(clientFd, body);
+        return true;
+    }
+    if (path == "/api/v1/source/overscan/auto")
+    {
+        result = handleSourceAutoCrop(clientFd, body);
+        return true;
+    }
+    if (path == "/api/v1/source/deinterlace")
+    {
+        result = handleSetSourceDeinterlace(clientFd, body);
+        return true;
+    }
+    if (path == "/api/v1/frame-generation")
+    {
+        result = handleSetFrameGeneration(clientFd, body);
         return true;
     }
     return false;
@@ -1118,14 +1206,132 @@ bool APIController::handleGETImageSettings(int clientFd)
     json << "{"
          << "\"brightness\": " << jsonNumber(m_uiManager->getBrightness()) << ", "
          << "\"contrast\": " << jsonNumber(m_uiManager->getContrast()) << ", "
+         << "\"saturation\": " << jsonNumber(m_uiManager->getSaturation()) << ", "
+         << "\"gamma\": " << jsonNumber(m_uiManager->getGamma()) << ", "
+         << "\"colorRange\": " << jsonString(colorRangeName(m_uiManager->getColorRange())) << ", "
+         << "\"expandLimitedAfterDecode\": " << jsonBool(m_uiManager->getExpandLimitedAfterDecode()) << ", "
+         << "\"downscaleFilter\": "
+         << jsonString(m_uiManager->getSourceDownscaleFilter() == 1   ? "nearest"
+                       : m_uiManager->getSourceDownscaleFilter() == 2 ? "area"
+                                                                       : "auto")
+         << ", "
          << "\"maintainAspect\": " << jsonBool(m_uiManager->getMaintainAspect()) << ", "
          << "\"fullscreen\": " << jsonBool(m_uiManager->getFullscreen()) << ", "
          << "\"monitorIndex\": " << jsonNumber(m_uiManager->getMonitorIndex()) << ", "
          << "\"outputWidth\": " << jsonNumber(m_uiManager->getOutputWidth()) << ", "
-         << "\"outputHeight\": " << jsonNumber(m_uiManager->getOutputHeight())
+         << "\"outputHeight\": " << jsonNumber(m_uiManager->getOutputHeight()) << ", "
+         << "\"fpsOverlay\": " << jsonBool(m_uiManager->getFpsOverlayEnabled()) << ", "
+         << "\"fpsOverlayCorner\": \""
+         << UIManager::fpsOverlayCornerName(m_uiManager->getFpsOverlayCorner()) << "\", "
+         << "\"fpsOverlayCompact\": " << jsonBool(m_uiManager->getFpsOverlayCompact()) << ", "
+         << "\"fpsOverlayGraph\": " << jsonBool(m_uiManager->getFpsOverlayGraph()) << ", ";
+    // #227 — output geometry.
+    const OutputGeometry geom = m_uiManager->getOutputGeometry();
+    json << "\"integerScale\": " << jsonNumber(static_cast<int>(geom.integerScale)) << ", "
+         << "\"aspectMode\": " << jsonNumber(static_cast<int>(geom.aspect)) << ", "
+         << "\"customAspectW\": " << jsonNumber(geom.customAspectW) << ", "
+         << "\"customAspectH\": " << jsonNumber(geom.customAspectH) << ", "
+         << "\"rotation\": " << jsonNumber(geom.rotation) << ", "
+         << "\"flipH\": " << jsonBool(geom.flipH) << ", "
+         << "\"flipV\": " << jsonBool(geom.flipV) << ", "
+         // #251 — built-in upscaler.
+         << "\"upscaler\": " << m_uiManager->getUpscalerSettings().toJson().dump() << ", "
+         << "\"upscalerIdle\": " << jsonBool(m_uiManager->getUpscalerIdle())
          << "}";
     sendJSONResponse(clientFd, 200, json.str());
     return true;
+}
+
+// #226 — last 1 s window of the FPS counter metrics. Measured whether or
+// not the overlay is shown.
+bool APIController::handleGETFpsStats(int clientFd)
+{
+    if (!m_uiManager)
+    {
+        sendErrorResponse(clientFd, 500, "UIManager not available");
+        return true;
+    }
+
+    const FpsStats st = m_uiManager->getFpsStats();
+    std::ostringstream json;
+    json << "{"
+         << "\"valid\": " << jsonBool(st.valid) << ", "
+         << "\"overlayEnabled\": " << jsonBool(m_uiManager->getFpsOverlayEnabled()) << ", "
+         << "\"render\": {"
+         << "\"fps\": " << jsonNumber(st.renderFps) << ", "
+         << "\"frameTimeMinMs\": " << jsonNumber(st.frameMinMs) << ", "
+         << "\"frameTimeAvgMs\": " << jsonNumber(st.frameAvgMs) << ", "
+         << "\"frameTimeMaxMs\": " << jsonNumber(st.frameMaxMs) << "}, "
+         << "\"capture\": {"
+         << "\"fps\": " << jsonNumber(st.captureFps) << ", "
+         << "\"nominalFps\": " << jsonNumber(st.captureNominalFps) << ", "
+         << "\"dropped\": " << st.captureDropped << ", "
+         << "\"duplicated\": " << st.captureDuplicated << ", "
+         << "\"droppedTotal\": " << st.captureDroppedTotal << ", "
+         << "\"duplicatedTotal\": " << st.captureDuplicatedTotal << "}, "
+         << "\"encoders\": {"
+         << "\"stream\": {\"active\": " << jsonBool(st.streamActive)
+         << ", \"fps\": " << jsonNumber(st.streamFps) << "}, "
+         << "\"raw\": {\"active\": " << jsonBool(st.rawActive)
+         << ", \"fps\": " << jsonNumber(st.rawFps) << "}, "
+         << "\"recording\": {\"active\": " << jsonBool(st.recordActive)
+         << ", \"fps\": " << jsonNumber(st.recordFps) << "}}, "
+         // #247 — output timeline (frame generation): real vs generated.
+         << "\"frameGeneration\": {"
+         << "\"active\": " << jsonBool(st.genActive) << ", "
+         << "\"realFps\": " << jsonNumber(st.genRealFps) << ", "
+         << "\"generatedFps\": " << jsonNumber(st.genFps) << ", "
+         << "\"dropped\": " << st.genDropped << ", "
+         << "\"targetFps\": " << jsonNumber(st.genTargetFps) << "}"
+         << "}";
+    sendJSONResponse(clientFd, 200, json.str());
+    return true;
+}
+
+namespace
+{
+const char *autoCropStateName(UIManager::AutoCropState st)
+{
+    switch (st)
+    {
+    case UIManager::AutoCropState::Running:
+        return "running";
+    case UIManager::AutoCropState::Done:
+        return "done";
+    case UIManager::AutoCropState::NoBorders:
+        return "no_borders";
+    case UIManager::AutoCropState::NoSignal:
+        return "no_signal";
+    default:
+        return "idle";
+    }
+}
+} // namespace
+
+std::string APIController::sourceCropJSON() const
+{
+    // #225 — 4-side crop. "x" / "y" / "locked" are the pre-#225 symmetric
+    // view (percent), kept so older clients keep working.
+    const SourceCrop &c = m_uiManager->getSourceCrop();
+    std::ostringstream out;
+    out << "{"
+        << "\"top\": " << jsonNumber(c.value[SourceCrop::Top]) << ", "
+        << "\"bottom\": " << jsonNumber(c.value[SourceCrop::Bottom]) << ", "
+        << "\"left\": " << jsonNumber(c.value[SourceCrop::Left]) << ", "
+        << "\"right\": " << jsonNumber(c.value[SourceCrop::Right]) << ", "
+        << "\"unit\": " << jsonString(SourceCrop::unitName(c.unit)) << ", "
+        << "\"link\": " << jsonString(SourceCrop::linkName(c.link)) << ", "
+        << "\"sourceWidth\": " << jsonNumber(m_uiManager->getCaptureTextureWidth()) << ", "
+        << "\"sourceHeight\": " << jsonNumber(m_uiManager->getCaptureTextureHeight()) << ", "
+        << "\"autoCrop\": {"
+        <<   "\"state\": " << jsonString(autoCropStateName(m_uiManager->getSourceAutoCropState())) << ", "
+        <<   "\"threshold\": " << jsonNumber(m_uiManager->getSourceAutoCropThreshold())
+        << "}, "
+        << "\"x\": " << jsonNumber(m_uiManager->getSourceOverscanPercentX()) << ", "
+        << "\"y\": " << jsonNumber(m_uiManager->getSourceOverscanPercentY()) << ", "
+        << "\"locked\": " << jsonBool(m_uiManager->getSourceOverscanLocked())
+        << "}";
+    return out.str();
 }
 
 bool APIController::handleGETSourceOverscan(int clientFd)
@@ -1135,14 +1341,185 @@ bool APIController::handleGETSourceOverscan(int clientFd)
         sendErrorResponse(clientFd, 500, "UIManager not available");
         return true;
     }
+    sendJSONResponse(clientFd, 200, sourceCropJSON());
+    return true;
+}
+
+bool APIController::handleGETFrameGeneration(int clientFd)
+{
+    if (!m_uiManager)
+    {
+        sendErrorResponse(clientFd, 500, "UIManager not available");
+        return true;
+    }
+    const FrameGenSettings g = m_uiManager->getFrameGenSettings();
+    const UIManager::FrameGenStatus st = m_uiManager->getFrameGenStatus();
+    const FpsStats fps = m_uiManager->getFpsStats();
     std::ostringstream out;
     out << "{"
-        << "\"x\": " << jsonNumber(m_uiManager->getSourceOverscanPercentX()) << ", "
-        << "\"y\": " << jsonNumber(m_uiManager->getSourceOverscanPercentY()) << ", "
-        << "\"locked\": " << jsonBool(m_uiManager->getSourceOverscanLocked())
+        << "\"mode\": " << jsonString(FrameGenSettings::modeName(g.mode)) << ", "
+        << "\"method\": " << jsonString(FrameGenSettings::methodName(g.method)) << ", "
+        << "\"protectStatic\": " << jsonBool(g.protectStatic) << ", "
+        << "\"skipRepeats\": " << jsonBool(g.skipRepeats) << ", "
+        << "\"outputs\": {"
+        << "\"window\": " << jsonBool(g.window) << ", "
+        << "\"stream\": " << jsonBool(g.stream) << ", "
+        << "\"recording\": " << jsonBool(g.record) << ", "
+        << "\"virtualCamera\": " << jsonBool(g.virtcam) << "}, "
+        << "\"status\": {"
+        << "\"supported\": " << jsonBool(st.supported) << ", "
+        << "\"motionSupported\": " << jsonBool(st.motionSupported) << ", "
+        << "\"rife\": {"
+        << "\"compiled\": " << jsonBool(st.rifeCompiled) << ", "
+        << "\"state\": "
+        << jsonString(st.rifeState == 1 ? "loading" : st.rifeState == 2 ? "ready" : st.rifeState == 3 ? "unavailable" : "idle")
+        << ", "
+        << "\"reason\": " << jsonString(st.rifeReason) << ", "
+        << "\"device\": " << jsonString(st.rifeDevice) << ", "
+        << "\"inferMs\": " << jsonNumber(st.rifeInferMs) << ", "
+        << "\"latencyMs\": " << jsonNumber(st.rifeLatencyMs) << ", "
+        << "\"delivered\": " << st.rifeDelivered << ", "
+        << "\"late\": " << st.rifeLate << "}, "
+        << "\"active\": " << jsonBool(st.active) << ", "
+        << "\"remoteDriven\": " << jsonBool(st.remoteDriven) << ", "
+        << "\"sourceFps\": " << jsonNumber(st.sourceFps) << ", "
+        << "\"captureFps\": " << jsonNumber(st.captureFps) << ", "
+        << "\"repeatsSkipped\": " << st.repeatsSkipped << ", "
+        << "\"sceneCuts\": " << st.sceneCuts << ", "
+        << "\"sourceWidth\": " << st.sourceWidth << ", "
+        << "\"sourceHeight\": " << st.sourceHeight << ", "
+        << "\"outputFps\": " << jsonNumber(st.outputFps) << ", "
+        << "\"addedLatencyMs\": " << jsonNumber(st.addedLatencyMs) << ", "
+        << "\"realFps\": " << jsonNumber(fps.genRealFps) << ", "
+        << "\"generatedFps\": " << jsonNumber(fps.genFps) << ", "
+        << "\"dropped\": " << fps.genDropped << "}"
         << "}";
     sendJSONResponse(clientFd, 200, out.str());
     return true;
+}
+
+bool APIController::handleSetFrameGeneration(int clientFd, const std::string &body)
+{
+    if (!m_uiManager)
+    {
+        sendErrorResponse(clientFd, 500, "UIManager not available");
+        return true;
+    }
+    try
+    {
+        nlohmann::json json = nlohmann::json::parse(body);
+        FrameGenSettings g = m_uiManager->getFrameGenSettings();
+        // Validate everything before applying anything.
+        if (json.contains("mode"))
+        {
+            const int m = json["mode"].is_string() ? FrameGenSettings::modeFromName(json["mode"].get<std::string>()) : -1;
+            if (m < 0)
+            {
+                sendErrorResponse(clientFd, 400, "Invalid 'mode' (use off, 2x, 3x, 4x, display or fill)");
+                return true;
+            }
+            g.mode = m;
+        }
+        if (json.contains("method"))
+        {
+            const int m = json["method"].is_string() ? FrameGenSettings::methodFromName(json["method"].get<std::string>()) : -1;
+            if (m < 0)
+            {
+                sendErrorResponse(clientFd, 400, "Invalid 'method' (use blend, motion or rife)");
+                return true;
+            }
+            g.method = m;
+        }
+        auto readBool = [&](const nlohmann::json &obj, const char *key, bool &dst) -> bool {
+            if (!obj.contains(key)) return true;
+            if (!obj[key].is_boolean()) return false;
+            dst = obj[key].get<bool>();
+            return true;
+        };
+        bool ok = readBool(json, "protectStatic", g.protectStatic) && readBool(json, "skipRepeats", g.skipRepeats);
+        if (ok && json.contains("outputs"))
+        {
+            const auto &o = json["outputs"];
+            ok = o.is_object() && readBool(o, "window", g.window) && readBool(o, "stream", g.stream) &&
+                 readBool(o, "recording", g.record) && readBool(o, "virtualCamera", g.virtcam);
+        }
+        if (!ok)
+        {
+            sendErrorResponse(clientFd, 400, "'protectStatic', 'skipRepeats' and 'outputs.*' must be booleans");
+            return true;
+        }
+        m_uiManager->setFrameGenSettings(g);
+        return handleGETFrameGeneration(clientFd);
+    }
+    catch (const std::exception &e)
+    {
+        sendErrorResponse(clientFd, 400, "Invalid JSON: " + std::string(e.what()));
+        return true;
+    }
+}
+
+bool APIController::handleGETSourceDeinterlace(int clientFd)
+{
+    if (!m_uiManager)
+    {
+        sendErrorResponse(clientFd, 500, "UIManager not available");
+        return true;
+    }
+    std::ostringstream out;
+    out << "{"
+        << "\"mode\": " << jsonString(deinterlaceModeName(m_uiManager->getDeinterlaceMode())) << ", "
+        << "\"fieldOrder\": " << jsonString(fieldOrderName(m_uiManager->getFieldOrder()))
+        << "}";
+    sendJSONResponse(clientFd, 200, out.str());
+    return true;
+}
+
+bool APIController::handleSetSourceDeinterlace(int clientFd, const std::string &body)
+{
+    if (!m_uiManager)
+    {
+        sendErrorResponse(clientFd, 500, "UIManager not available");
+        return true;
+    }
+    try
+    {
+        nlohmann::json json = nlohmann::json::parse(body);
+        // Validate both before applying either.
+        int mode = -2, order = -2;
+        if (json.contains("mode"))
+        {
+            const auto &m = json["mode"];
+            mode = m.is_number_integer() ? m.get<int>()
+                 : m.is_string()         ? deinterlaceModeFromName(m.get<std::string>())
+                                         : -1;
+            if (mode < 0 || mode > 3)
+            {
+                sendErrorResponse(clientFd, 400, "Invalid 'mode' (use off, bob, weave or blend)");
+                return true;
+            }
+        }
+        if (json.contains("fieldOrder"))
+        {
+            const auto &o = json["fieldOrder"];
+            order = o.is_number_integer() ? o.get<int>()
+                  : o.is_string()         ? fieldOrderFromName(o.get<std::string>())
+                                          : -1;
+            if (order < 0 || order > 2)
+            {
+                sendErrorResponse(clientFd, 400, "Invalid 'fieldOrder' (use auto, tff or bff)");
+                return true;
+            }
+        }
+        if (mode >= 0) m_uiManager->setDeinterlaceMode(mode);
+        if (order >= 0) m_uiManager->setFieldOrder(order);
+        m_uiManager->saveConfig();
+        return handleGETSourceDeinterlace(clientFd);
+    }
+    catch (const std::exception &e)
+    {
+        sendErrorResponse(clientFd, 400, "Invalid JSON: " + std::string(e.what()));
+        return true;
+    }
 }
 
 bool APIController::handleSetSourceOverscan(int clientFd, const std::string &body)
@@ -1155,7 +1532,32 @@ bool APIController::handleSetSourceOverscan(int clientFd, const std::string &bod
     try
     {
         nlohmann::json json = nlohmann::json::parse(body);
-        // `locked` updated first so the X/Y setters mirror correctly.
+        // Order matters: the unit first (it converts the stored values),
+        // then the link mode, then the sides (mirrored by the link).
+        if (json.contains("unit") && json["unit"].is_string())
+        {
+            const std::string u = json["unit"].get<std::string>();
+            const int unit = SourceCrop::unitFromName(u.c_str(), -1);
+            if (unit < 0)
+            {
+                sendErrorResponse(clientFd, 400, "unit must be \"percent\" or \"px\"");
+                return true;
+            }
+            m_uiManager->setSourceCropUnit(unit);
+        }
+        if (json.contains("link") && json["link"].is_string())
+        {
+            const std::string l = json["link"].get<std::string>();
+            const int link = SourceCrop::linkFromName(l.c_str(), -1);
+            if (link < 0)
+            {
+                sendErrorResponse(clientFd, 400, "link must be \"none\", \"pairs\" or \"all\"");
+                return true;
+            }
+            m_uiManager->setSourceCropLink(link);
+        }
+        // Legacy symmetric fields (pre-#225): `locked` first so the X/Y
+        // setters mirror correctly. Percent, 0..30 as before.
         if (json.contains("locked") && json["locked"].is_boolean())
         {
             m_uiManager->setSourceOverscanLocked(json["locked"].get<bool>());
@@ -1174,15 +1576,38 @@ bool APIController::handleSetSourceOverscan(int clientFd, const std::string &bod
             if (y > 30.0f) y = 30.0f;
             m_uiManager->setSourceOverscanPercentY(y);
         }
+        const struct
+        {
+            const char *key;
+            int side;
+        } sides[4] = {{"top", SourceCrop::Top},
+                      {"bottom", SourceCrop::Bottom},
+                      {"left", SourceCrop::Left},
+                      {"right", SourceCrop::Right}};
+        for (const auto &sd : sides)
+        {
+            if (json.contains(sd.key) && json[sd.key].is_number())
+            {
+                const SourceCrop &c = m_uiManager->getSourceCrop();
+                float v = json[sd.key].get<float>();
+                const float maxV = c.maxSideValue(sd.side, m_uiManager->getCaptureTextureWidth(),
+                                                  m_uiManager->getCaptureTextureHeight());
+                if (v < 0.0f) v = 0.0f;
+                if (v > maxV) v = maxV;
+                if (c.unit == SourceCrop::Pixels)
+                    v = static_cast<float>(static_cast<int>(v + 0.5f));
+                m_uiManager->setSourceCropSide(sd.side, v);
+            }
+        }
+        if (json.contains("autoCropThreshold") && json["autoCropThreshold"].is_number_integer())
+        {
+            int t = json["autoCropThreshold"].get<int>();
+            if (t < 0) t = 0;
+            if (t > 128) t = 128;
+            m_uiManager->setSourceAutoCropThreshold(t);
+        }
         m_uiManager->saveConfig();
-
-        std::ostringstream out;
-        out << "{"
-            << "\"x\": " << jsonNumber(m_uiManager->getSourceOverscanPercentX()) << ", "
-            << "\"y\": " << jsonNumber(m_uiManager->getSourceOverscanPercentY()) << ", "
-            << "\"locked\": " << jsonBool(m_uiManager->getSourceOverscanLocked())
-            << "}";
-        sendJSONResponse(clientFd, 200, out.str());
+        sendJSONResponse(clientFd, 200, sourceCropJSON());
         return true;
     }
     catch (const std::exception &e)
@@ -1190,6 +1615,41 @@ bool APIController::handleSetSourceOverscan(int clientFd, const std::string &bod
         sendErrorResponse(clientFd, 400, "Invalid JSON: " + std::string(e.what()));
         return true;
     }
+}
+
+bool APIController::handleSourceAutoCrop(int clientFd, const std::string &body)
+{
+    // #225 — POST /api/v1/source/overscan/auto {"threshold": 0..128}
+    // Starts black-border detection on the next few live frames; poll
+    // GET /api/v1/source/overscan for autoCrop.state and the new values.
+    if (!m_uiManager)
+    {
+        sendErrorResponse(clientFd, 500, "UIManager not available");
+        return true;
+    }
+    int threshold = m_uiManager->getSourceAutoCropThreshold();
+    if (!body.empty())
+    {
+        try
+        {
+            nlohmann::json json = nlohmann::json::parse(body);
+            if (json.contains("threshold") && json["threshold"].is_number_integer())
+            {
+                threshold = json["threshold"].get<int>();
+                if (threshold < 0) threshold = 0;
+                if (threshold > 128) threshold = 128;
+                m_uiManager->setSourceAutoCropThreshold(threshold);
+            }
+        }
+        catch (const std::exception &e)
+        {
+            sendErrorResponse(clientFd, 400, "Invalid JSON: " + std::string(e.what()));
+            return true;
+        }
+    }
+    m_uiManager->requestSourceAutoCrop(threshold);
+    sendJSONResponse(clientFd, 200, sourceCropJSON());
+    return true;
 }
 
 bool APIController::handleGETStreamingSettings(int clientFd)
@@ -1386,11 +1846,7 @@ std::string APIController::buildMetaSnapshotJSON()
          <<   "\"width\": "  << jsonNumber(metaSrcW)   << ", "
          <<   "\"height\": " << jsonNumber(metaSrcH)  << ", "
          <<   "\"fps\": "    << jsonNumber(m_uiManager->getCaptureFps())     << ", "
-         <<   "\"overscan\": {"
-         <<     "\"x\": "      << jsonNumber(m_uiManager->getSourceOverscanPercentX()) << ", "
-         <<     "\"y\": "      << jsonNumber(m_uiManager->getSourceOverscanPercentY()) << ", "
-         <<     "\"locked\": " << jsonBool(m_uiManager->getSourceOverscanLocked())
-         <<   "}"
+         <<   "\"overscan\": " << sourceCropJSON()
          << "}, "
          << "\"image\": {"
          <<   "\"brightness\": "     << jsonNumber(m_uiManager->getBrightness())     << ", "
@@ -1884,15 +2340,69 @@ bool APIController::handleSetImageSettings(int clientFd, const std::string &body
 
         if (json.contains("brightness"))
         {
+            // #242 — multiplier, 1.0 = unchanged. Clamp to the CLI's
+            // 0..5 range so a stale portal (old -1..1 slider) can't
+            // push a negative value.
             float brightness = json["brightness"].get<float>();
-            m_uiManager->setBrightness(brightness);
+            m_uiManager->setBrightness(std::max(0.0f, std::min(5.0f, brightness)));
             updated = true;
         }
 
         if (json.contains("contrast"))
         {
             float contrast = json["contrast"].get<float>();
-            m_uiManager->setContrast(contrast);
+            m_uiManager->setContrast(std::max(0.0f, std::min(5.0f, contrast)));
+            updated = true;
+        }
+
+        // #228 — source colour controls
+        if (json.contains("saturation"))
+        {
+            m_uiManager->setSaturation(std::max(0.0f, std::min(3.0f, json["saturation"].get<float>())));
+            updated = true;
+        }
+
+        if (json.contains("gamma"))
+        {
+            m_uiManager->setGamma(std::max(0.2f, std::min(3.0f, json["gamma"].get<float>())));
+            updated = true;
+        }
+
+        if (json.contains("colorRange"))
+        {
+            const auto &cr = json["colorRange"];
+            int range = -1;
+            if (cr.is_number_integer())
+                range = cr.get<int>();
+            else if (cr.is_string())
+                range = colorRangeFromName(cr.get<std::string>());
+            if (range < 0 || range > 2)
+            {
+                sendErrorResponse(clientFd, 400, "Invalid 'colorRange' (use auto, limited or full)");
+                return true;
+            }
+            m_uiManager->setColorRange(range);
+            updated = true;
+        }
+
+        // #243 — extra 16-235 -> 0-255 expansion after the decode.
+        if (json.contains("expandLimitedAfterDecode"))
+        {
+            m_uiManager->setExpandLimitedAfterDecode(json["expandLimitedAfterDecode"].get<bool>());
+            updated = true;
+        }
+
+        // Source downscale filter (logical capture size below the device's).
+        if (json.contains("downscaleFilter"))
+        {
+            const std::string f = json["downscaleFilter"].is_string() ? json["downscaleFilter"].get<std::string>() : "";
+            const int v = f == "auto" ? 0 : f == "nearest" ? 1 : f == "area" ? 2 : -1;
+            if (v < 0)
+            {
+                sendErrorResponse(clientFd, 400, "Invalid 'downscaleFilter' (use auto, nearest or area)");
+                return true;
+            }
+            m_uiManager->setSourceDownscaleFilter(v);
             updated = true;
         }
 
@@ -1924,6 +2434,108 @@ bool APIController::handleSetImageSettings(int clientFd, const std::string &body
             m_uiManager->setOutputResolution(outputWidth, outputHeight);
             updated = true;
         }
+
+        // #226 — FPS counter overlay.
+        if (json.contains("fpsOverlay"))
+        {
+            m_uiManager->setFpsOverlayEnabled(json["fpsOverlay"].get<bool>());
+            updated = true;
+        }
+        if (json.contains("fpsOverlayCorner"))
+        {
+            const int corner = json["fpsOverlayCorner"].is_number_integer()
+                                   ? json["fpsOverlayCorner"].get<int>()
+                                   : UIManager::fpsOverlayCornerFromName(
+                                         json["fpsOverlayCorner"].get<std::string>());
+            if (corner < 0 || corner > 3)
+            {
+                sendErrorResponse(clientFd, 400,
+                                  "Invalid 'fpsOverlayCorner'. Use top-left, top-right, "
+                                  "bottom-left or bottom-right");
+                return true;
+            }
+            m_uiManager->setFpsOverlayCorner(corner);
+            updated = true;
+        }
+        if (json.contains("fpsOverlayCompact"))
+        {
+            m_uiManager->setFpsOverlayCompact(json["fpsOverlayCompact"].get<bool>());
+            updated = true;
+        }
+        if (json.contains("fpsOverlayGraph"))
+        {
+            m_uiManager->setFpsOverlayGraph(json["fpsOverlayGraph"].get<bool>());
+            updated = true;
+        }
+
+        // #227 — output geometry. integerScale: 0 off, 1 integer,
+        // 2 integer + fill. aspectMode: 0 auto, 1 4:3, 2 8:7, 3 16:9,
+        // 4 10:9, 5 3:2, 6 custom (customAspectW:customAspectH).
+        // rotation: degrees clockwise (snapped to 0/90/180/270).
+        {
+            OutputGeometry geom = m_uiManager->getOutputGeometry();
+            bool geomUpdated = false;
+            if (json.contains("integerScale"))
+            {
+                geom.integerScale = static_cast<OutputGeometry::IntegerScale>(
+                    std::max(0, std::min(2, json["integerScale"].get<int>())));
+                geomUpdated = true;
+            }
+            if (json.contains("aspectMode"))
+            {
+                geom.aspect = static_cast<OutputGeometry::Aspect>(
+                    std::max(0, std::min(6, json["aspectMode"].get<int>())));
+                geomUpdated = true;
+            }
+            if (json.contains("customAspectW"))
+            {
+                geom.customAspectW = std::max(0.01f, json["customAspectW"].get<float>());
+                geomUpdated = true;
+            }
+            if (json.contains("customAspectH"))
+            {
+                geom.customAspectH = std::max(0.01f, json["customAspectH"].get<float>());
+                geomUpdated = true;
+            }
+            if (json.contains("rotation"))
+            {
+                geom.rotation = OutputGeometry::normalizeRotation(json["rotation"].get<int>());
+                geomUpdated = true;
+            }
+            if (json.contains("flipH"))
+            {
+                geom.flipH = json["flipH"].get<bool>();
+                geomUpdated = true;
+            }
+            if (json.contains("flipV"))
+            {
+                geom.flipV = json["flipV"].get<bool>();
+                geomUpdated = true;
+            }
+            if (geomUpdated)
+            {
+                m_uiManager->setOutputGeometry(geom);
+                updated = true;
+            }
+        }
+
+        // #251 — built-in upscaler: {"mode", "target", "customWidth",
+        // "customHeight", "sharpness", "position"}; keys left out keep
+        // their value.
+        if (json.contains("upscaler"))
+        {
+            UpscalerSettings up = m_uiManager->getUpscalerSettings();
+            std::string err;
+            if (!up.applyJson(json["upscaler"], &err))
+            {
+                sendErrorResponse(clientFd, 400, err);
+                return true;
+            }
+            m_uiManager->setUpscalerSettings(up);
+            updated = true;
+        }
+
+        if (updated) m_uiManager->saveConfig();
 
         std::ostringstream response;
         response << "{\"success\": " << jsonBool(updated) << "}";

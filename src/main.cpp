@@ -2,6 +2,9 @@
 #include "streaming/CloudflaredDownloader.h"
 #include "ui/UIManager.h"
 #include "ui/UIRemoteConnection.h"
+#include "processing/FrameGenBench.h"
+#include "processing/UpscalerBench.h"
+#include "processing/FrameGenSettings.h"
 #include "utils/HttpClient.h"
 #include "utils/Logger.h"
 
@@ -103,6 +106,9 @@ void printUsage(const char *programName)
     std::cout << "  --web-portal-ssl-key <path>      Path to the SSL key (default: ssl/server.key)\n";
     std::cout << "\nOther:\n";
     std::cout << "  --hide-ui              Hide ImGui UI on startup (can be toggled with F12)\n";
+    std::cout << "  --frame-gen <mode>     Frame generation (#247): off, 2x, 3x, 4x, display, fill (this run only)\n";
+    std::cout << "  --frame-gen-method <m> blend, motion (GPU optical flow, default) or rife (neural, Vulkan)\n";
+    std::cout << "  --frame-gen-outputs <list>  Comma list of window,stream,recording,virtcam (default: all)\n";
     std::cout << "  --help, -h             Show this help\n";
     std::cout << "\nExamples:\n";
     std::cout << "  " << programName << " --source v4l2 --v4l2-device /dev/video2 --preset shaders/shaders_glsl/crt/zfast-crt.glslp\n";
@@ -206,6 +212,9 @@ int main(int argc, char *argv[])
     bool streamingEnabled = false;
     int streamingPort = 8080;
     bool streamPortExplicit = false;  // user passed --stream-port / --web-portal-port (#163)
+    // #223 — stream size / fps / bitrate given on the CLI win over the saved config.
+    bool streamWidthExplicit = false, streamHeightExplicit = false;
+    bool streamFpsExplicit = false, streamBitrateExplicit = false;
     int streamWidth = 640;                 // Padrão: 640px (0 = usar resolução de captura)
     int streamHeight = 480;                // Padrão: 480px (0 = usar resolução de captura)
     int streamFps = 60;                    // Padrão: 60fps (0 = usar FPS da captura)
@@ -224,6 +233,8 @@ int main(int argc, char *argv[])
     
     // UI visibility
     bool hideUI = false; // Hide ImGui UI on startup
+    // #247 — frame generation overrides (this run only) and the bench.
+    std::string frameGenMode, frameGenMethod, frameGenOutputs, frameGenBench, upscalerBench;
 
     // Parsear argumentos
     for (int i = 1; i < argc; ++i)
@@ -661,6 +672,7 @@ int main(int argc, char *argv[])
                 LOG_ERROR("Invalid stream width. Use a value between 1 and 7680");
                 return 1;
             }
+            streamWidthExplicit = true;
         }
         else if (arg == "--stream-height" && i + 1 < argc)
         {
@@ -670,6 +682,7 @@ int main(int argc, char *argv[])
                 LOG_ERROR("Invalid stream height. Use a value between 1 and 4320");
                 return 1;
             }
+            streamHeightExplicit = true;
         }
         else if (arg == "--stream-fps" && i + 1 < argc)
         {
@@ -679,6 +692,7 @@ int main(int argc, char *argv[])
                 LOG_ERROR("Invalid stream FPS. Use a value between 1 and 120");
                 return 1;
             }
+            streamFpsExplicit = true;
         }
         else if (arg == "--stream-bitrate" && i + 1 < argc)
         {
@@ -688,6 +702,7 @@ int main(int argc, char *argv[])
                 LOG_ERROR("Invalid stream bitrate. Use a value between 100 and 50000 kbps");
                 return 1;
             }
+            streamBitrateExplicit = true;
         }
         else if (arg == "--stream-audio-bitrate" && i + 1 < argc)
         {
@@ -744,6 +759,28 @@ int main(int argc, char *argv[])
         else if (arg == "--hide-ui")
         {
             hideUI = true;
+        }
+        else if (arg == "--frame-gen" && i + 1 < argc)
+        {
+            frameGenMode = argv[++i];
+        }
+        else if (arg == "--frame-gen-method" && i + 1 < argc)
+        {
+            frameGenMethod = argv[++i];
+        }
+        else if (arg == "--frame-gen-outputs" && i + 1 < argc)
+        {
+            frameGenOutputs = argv[++i];
+        }
+        else if (arg == "--upscaler-bench" && i + 1 < argc)
+        {
+            // Test tooling (see UpscalerBench.h), not in --help.
+            upscalerBench = argv[++i];
+        }
+        else if (arg == "--framegen-bench" && i + 1 < argc)
+        {
+            // Test tooling (see FrameGenBench.h), not in --help.
+            frameGenBench = argv[++i];
         }
         else
         {
@@ -997,6 +1034,8 @@ int main(int argc, char *argv[])
     app.setStreamingEnabled(streamingEnabled);
     app.setStreamingPort(streamingPort);
     app.setStreamingPortExplicit(streamPortExplicit);
+    app.setStreamingCliOverrides(streamWidthExplicit, streamHeightExplicit,
+                                 streamFpsExplicit, streamBitrateExplicit);
     // Always set width/height (0 means use capture resolution)
     app.setStreamingWidth(streamWidth);
     app.setStreamingHeight(streamHeight);
@@ -1063,6 +1102,55 @@ int main(int argc, char *argv[])
         }
     }
     
+    // Upscaler quality bench: needs only the GL context; exit after.
+    if (!upscalerBench.empty())
+    {
+        const int rc = runUpscalerBench(upscalerBench);
+        app.shutdown();
+        return rc;
+    }
+
+    // #247 — frame-generation bench: needs only the GL context; exit after.
+    if (!frameGenBench.empty())
+    {
+        const int rc = runFrameGenBench(frameGenBench);
+        app.shutdown();
+        return rc;
+    }
+
+    // #247 — frame generation from the command line (not persisted).
+    if (app.getUIManager() && (!frameGenMode.empty() || !frameGenMethod.empty() || !frameGenOutputs.empty()))
+    {
+        FrameGenSettings fg = app.getUIManager()->getFrameGenSettings();
+        if (!frameGenMode.empty())
+        {
+            const int m = FrameGenSettings::modeFromName(frameGenMode);
+            if (m < 0)
+                LOG_WARN("Unknown --frame-gen mode: " + frameGenMode);
+            else
+                fg.mode = m;
+        }
+        if (!frameGenMethod.empty())
+        {
+            const int m = FrameGenSettings::methodFromName(frameGenMethod);
+            if (m < 0)
+                LOG_WARN("Unknown --frame-gen-method: " + frameGenMethod);
+            else
+                fg.method = m;
+        }
+        if (!frameGenOutputs.empty())
+        {
+            const std::string list = "," + frameGenOutputs + ",";
+            fg.window = list.find(",window,") != std::string::npos;
+            fg.stream = list.find(",stream,") != std::string::npos;
+            fg.record = list.find(",recording,") != std::string::npos;
+            fg.virtcam = list.find(",virtcam,") != std::string::npos;
+        }
+        app.getUIManager()->setFrameGenSettings(fg, /*persist=*/false);
+        LOG_INFO(std::string("Frame generation (command line): ") + FrameGenSettings::modeName(fg.mode) + ", " +
+                 FrameGenSettings::methodName(fg.method));
+    }
+
     // Hide UI if requested (same as pressing F12)
     // IMPORTANT: This must be done AFTER init() but BEFORE run()
     // so cursor visibility is set correctly on startup

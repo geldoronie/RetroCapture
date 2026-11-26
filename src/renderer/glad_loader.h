@@ -60,6 +60,7 @@ extern void (*glGenTextures)(GLsizei n, GLuint* textures);
 extern void (*glDeleteTextures)(GLsizei n, const GLuint* textures);
 extern void (*glBindTexture)(GLenum target, GLuint texture);
 extern void (*glTexParameteri)(GLenum target, GLenum pname, GLint param);
+extern void (*glGetTexParameteriv)(GLenum target, GLenum pname, GLint* params);
 extern void (*glTexImage2D)(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLint border, GLenum format, GLenum type, const void* data);
 extern void (*glTexSubImage2D)(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLenum type, const void* data);
 extern void (*glGenFramebuffers)(GLsizei n, GLuint* framebuffers);

@@ -5,6 +5,8 @@
 #include <map>
 #include <cstdint>
 #include "../utils/FilesystemCompat.h"
+#include "../processing/SourceCrop.h"
+#include "../processing/UpscalerSettings.h"
 
 /**
  * @brief Manages capture presets (save, load, list, delete)
@@ -34,10 +36,26 @@ public:
         uint32_t captureFps = 0;
         std::string devicePath;
         int sourceType = 0; // 0=None, 1=V4L2, 2=DirectShow
+
+        // #225 — source crop. Presets saved before it have none and leave
+        // the current crop alone when applied.
+        bool hasSourceCrop = false;
+        SourceCrop sourceCrop;
         
         // Image settings
         float imageBrightness = 1.0f;
         float imageContrast = 1.0f;
+        // #228 — source colour controls (identity defaults; older presets
+        // without these keys load as identity)
+        float imageSaturation = 1.0f;
+        float imageGamma = 1.0f;
+        int imageColorRange = 0; // 0 = Auto, 1 = Limited, 2 = Full
+        bool imageExpandLimitedAfterDecode = false; // #243 (older presets: off)
+        int imageDownscaleFilter = 0; // 0 Auto, 1 Nearest, 2 Area (older presets: Auto)
+        UpscalerSettings upscaler; // #251 (older presets: Off)
+        // #229 — deinterlacing (older presets load as Off / Auto)
+        int deinterlaceMode = 0; // 0 = Off, 1 = Bob, 2 = Weave, 3 = Blend
+        int fieldOrder = 0;      // 0 = Auto, 1 = TFF, 2 = BFF
         bool maintainAspect = true;
         bool fullscreen = false;
         int monitorIndex = 0;

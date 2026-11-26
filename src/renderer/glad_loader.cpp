@@ -42,6 +42,7 @@ void (*glGenTextures)(GLsizei, GLuint *) = nullptr;
 void (*glDeleteTextures)(GLsizei, const GLuint *) = nullptr;
 void (*glBindTexture)(GLenum, GLuint) = nullptr;
 void (*glTexParameteri)(GLenum, GLenum, GLint) = nullptr;
+void (*glGetTexParameteriv)(GLenum, GLenum, GLint *) = nullptr;
 void (*glTexImage2D)(GLenum, GLint, GLint, GLsizei, GLsizei, GLint, GLenum, GLenum, const void *) = nullptr;
 void (*glTexSubImage2D)(GLenum, GLint, GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, const void *) = nullptr;
 void (*glGenFramebuffers)(GLsizei, GLuint *) = nullptr;
@@ -135,6 +136,7 @@ bool loadOpenGLFunctions()
     LOAD_FUNC(glDeleteTextures)
     LOAD_FUNC(glBindTexture)
     LOAD_FUNC(glTexParameteri)
+    LOAD_FUNC(glGetTexParameteriv)
     LOAD_FUNC(glTexImage2D)
     LOAD_FUNC(glTexSubImage2D)
 

@@ -56,6 +56,10 @@ jobs:
           brew install cmake pkg-config glfw ffmpeg libpng openssl@3 || true
           brew list --versions cmake pkg-config glfw ffmpeg libpng openssl@3
 
+      # #248 — RIFE (ncnn + Vulkan/MoltenVK) is not built on macOS yet: the
+      # installed ncnn referenced the temporary simplevk.tbd from its build
+      # tree and broke the link, and the MoltenVK path is untested. macOS
+      # bundles fall back to the Motion method (#255 tracks enabling it).
       - name: Build bundle
         run: ./tools/build-macos-bundle.sh --clean Release
 
