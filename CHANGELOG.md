@@ -60,6 +60,26 @@ upscale, and a remote client can relay what it receives to the virtual camera.
   outside its own folder (#273).
 - **The Info panel showed "RetroCapture v0.1.0"**; it now shows the real
   version (#271).
+- **Client mode applied the client's own Image settings to the host's
+  stream**: crop, color, deinterlace, denoise, upscaler, output geometry and
+  brightness / contrast. The stream is now shown as the host sends it, with
+  the host's shader and the host's brightness / contrast, which the client
+  follows live instead of copying them into its own settings once per
+  connection. The local settings are kept for when the source is local
+  again, and the Image window says so.
+- **Client mode didn't always follow the host's shader**:
+  - when the host picked None, the client kept its last shader;
+  - a shader loaded from a profile with an absolute path was looked up at
+    the host's path on the client. /meta now sends the path relative to the
+    shader folder, and the client also accepts an older host's absolute path;
+  - reconnecting to a host whose shader hadn't changed didn't apply it again.
+- **The shader looked different on a client with a smaller window.** The
+  chain renders at the window size, so masks and scanlines were computed for
+  the client's window instead of the host's. /meta now carries the host's
+  shader viewport; the client renders the chain at that size and scales it
+  to its window with mipmaps (no moire). Measured with crt-aperture, a host
+  at 1600x960 and a client at 800x480: 31.8 dB against the host's picture,
+  versus 17.7 dB before.
 
 ### Known limitations
 

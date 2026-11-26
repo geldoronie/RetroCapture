@@ -317,6 +317,7 @@ private:
     std::string                      m_pendingRemotePreset;
     std::string                      m_pendingRemotePresetHash;
     std::string                      m_appliedRemotePresetHash;
+    bool                             m_pendingRemoteShaderActive = true;
     bool                             m_pendingRemotePipelineEnabled = true;
     std::vector<std::pair<std::string, float>> m_pendingRemoteParams;
     // Host's source resolution from /meta. The capture rescales /raw to
@@ -335,6 +336,22 @@ private:
     uint32_t                         m_pendingRemoteImageOutputWidth    = 0;
     uint32_t                         m_pendingRemoteImageOutputHeight   = 0;
     bool                             m_hasPendingRemoteImageSeed        = false;
+    // Host's brightness / contrast, followed on every snapshot. The host
+    // applies them after its shader, so /raw doesn't carry them and the
+    // client applies them in place of its own (see
+    // FrameCapturePipeline::localImagePipeline()).
+    float                            m_pendingRemoteBrightness = 1.0f;
+    float                            m_pendingRemoteContrast   = 1.0f;
+    float                            m_remoteHostBrightness    = 1.0f;
+    float                            m_remoteHostContrast      = 1.0f;
+    // Host's shader viewport from /meta (0 = unknown, older host). The
+    // client renders its shader chain at this size, then scales the result
+    // to its own window, so the effect matches the host whatever the size
+    // of the client's window.
+    uint32_t                         m_pendingRemoteViewportW = 0;
+    uint32_t                         m_pendingRemoteViewportH = 0;
+    uint32_t                         m_remoteShaderViewportW  = 0;
+    uint32_t                         m_remoteShaderViewportH  = 0;
 
     // Buffers reutilizáveis no caminho de captura — evita alocar ~6MB/frame a 1080p.
     // pushFrame() copia os dados, então é seguro reutilizar.

@@ -1964,7 +1964,13 @@ void Application::run()
         // #228 — source colour controls live in UIManager (Image window,
         // web API, config); hand them to the frame processor every
         // iteration on the GL thread. A no-op unless a value changed.
-        if (m_ui && m_frameProcessor)
+        // Client mode (Remote source): the host's picture is shown as it
+        // arrives, so the local adjustments stay at their neutral defaults.
+        if (m_ui && m_frameProcessor && m_ui->isRemoteSource())
+        {
+            m_frameProcessor->setSourceAdjustments(SourceAdjustments());
+        }
+        else if (m_ui && m_frameProcessor)
         {
             SourceAdjustments adj;
             adj.colorRange = static_cast<SourceColorRange>(m_ui->getColorRange());

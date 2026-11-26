@@ -120,6 +120,9 @@ private:
 
     // #225 — auto-crop: a few spaced readbacks of the uncropped source.
     void runAutoCropSampling();
+    // False in client mode: the local Image settings are not applied to the
+    // host's stream.
+    bool localImagePipeline() const;
     struct AutoCropSampler
     {
         bool active = false;

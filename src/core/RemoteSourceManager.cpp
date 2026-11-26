@@ -92,6 +92,10 @@ RemoteSourceManager::RemoteSourceManager(Application &app) : m_app(app)
 
 void RemoteSourceManager::startWorker(const std::string &devicePath, const std::string *authToken)
 {
+    // Every connection applies the host's shader again, even the one
+    // applied last time (the local shader may have changed in between).
+    m_app.m_appliedRemotePresetHash.clear();
+    m_app.m_remoteShaderViewportW = m_app.m_remoteShaderViewportH = 0;
     m_app.m_remoteMetaSync = std::make_unique<RemoteMetaSync>();
     if (authToken)
         m_app.m_remoteMetaSync->setAuthToken(*authToken);
@@ -104,6 +108,11 @@ void RemoteSourceManager::stageSnapshot(const RemoteMetaSync::Snapshot &snap)
     std::lock_guard<std::mutex> lock(m_app.m_pendingRemoteMutex);
     m_app.m_pendingRemotePreset          = snap.preset;
     m_app.m_pendingRemotePresetHash      = snap.presetHash;
+    m_app.m_pendingRemoteShaderActive    = snap.shaderActive;
+    m_app.m_pendingRemoteBrightness      = snap.imageBrightness;
+    m_app.m_pendingRemoteContrast        = snap.imageContrast;
+    m_app.m_pendingRemoteViewportW       = snap.viewportWidth;
+    m_app.m_pendingRemoteViewportH       = snap.viewportHeight;
     m_app.m_pendingRemotePipelineEnabled = snap.pipelineEnabled;
     m_app.m_pendingRemoteParams.clear();
     m_app.m_pendingRemoteParams.reserve(snap.parameters.size());
@@ -119,8 +128,6 @@ void RemoteSourceManager::stageSnapshot(const RemoteMetaSync::Snapshot &snap)
     // them on the GL thread, otherwise the apply gate skips.
     if (!m_app.m_remoteImageSeeded)
     {
-        m_app.m_pendingRemoteImageBrightness     = snap.imageBrightness;
-        m_app.m_pendingRemoteImageContrast       = snap.imageContrast;
         m_app.m_pendingRemoteImageMaintainAspect = snap.imageMaintainAspect;
         m_app.m_pendingRemoteImageOutputWidth    = snap.imageOutputWidth;
         m_app.m_pendingRemoteImageOutputHeight   = snap.imageOutputHeight;
@@ -171,10 +178,10 @@ void RemoteSourceManager::applyPendingRemoteMeta()
     std::string preset;
     std::string presetHash;
     bool pipelineEnabled = true;
+    bool shaderActive = true;
     std::vector<std::pair<std::string, float>> params;
     uint32_t sourceW = 0, sourceH = 0;
     bool seedImage = false;
-    float imgBrightness = 1.0f, imgContrast = 1.0f;
     bool imgMaintainAspect = true;
     uint32_t imgOutW = 0, imgOutH = 0;
     {
@@ -182,14 +189,17 @@ void RemoteSourceManager::applyPendingRemoteMeta()
         preset           = std::move(m_app.m_pendingRemotePreset);
         presetHash       = std::move(m_app.m_pendingRemotePresetHash);
         pipelineEnabled  = m_app.m_pendingRemotePipelineEnabled;
+        shaderActive     = m_app.m_pendingRemoteShaderActive;
+        m_app.m_remoteHostBrightness = m_app.m_pendingRemoteBrightness;
+        m_app.m_remoteHostContrast   = m_app.m_pendingRemoteContrast;
+        m_app.m_remoteShaderViewportW = m_app.m_pendingRemoteViewportW;
+        m_app.m_remoteShaderViewportH = m_app.m_pendingRemoteViewportH;
         params           = std::move(m_app.m_pendingRemoteParams);
         sourceW          = m_app.m_pendingRemoteSourceWidth;
         sourceH          = m_app.m_pendingRemoteSourceHeight;
         if (m_app.m_hasPendingRemoteImageSeed)
         {
             seedImage         = true;
-            imgBrightness     = m_app.m_pendingRemoteImageBrightness;
-            imgContrast       = m_app.m_pendingRemoteImageContrast;
             imgMaintainAspect = m_app.m_pendingRemoteImageMaintainAspect;
             imgOutW           = m_app.m_pendingRemoteImageOutputWidth;
             imgOutH           = m_app.m_pendingRemoteImageOutputHeight;
@@ -198,21 +208,18 @@ void RemoteSourceManager::applyPendingRemoteMeta()
         m_app.m_hasPendingRemoteMeta.store(false);
     }
 
-    // Seed the local Image tab from the host on the very first snapshot
-    // per connection. m_remoteImageSeeded flips true here and gates the
-    // callback so subsequent snapshots leave these values alone — the
-    // user is free to tweak the local Image controls after the initial
-    // sync.
+    // Seed the window fit and output resolution from the host on the very
+    // first snapshot per connection; later snapshots leave them to the
+    // local user. Brightness / contrast are not seeded into the local
+    // settings: the host's values are followed on every snapshot
+    // (m_remoteHostBrightness / m_remoteHostContrast) and used in place of
+    // the local ones while in client mode.
     if (seedImage && m_app.m_ui)
     {
-        m_app.m_ui->setBrightness(imgBrightness);
-        m_app.m_ui->setContrast(imgContrast);
         m_app.m_ui->setMaintainAspect(imgMaintainAspect);
         m_app.m_ui->setOutputResolution(imgOutW, imgOutH);
         m_app.m_remoteImageSeeded = true;
-        LOG_INFO("RemoteMetaSync: seeded local Image from host — brightness=" +
-                 std::to_string(imgBrightness) + " contrast=" +
-                 std::to_string(imgContrast) + " maintainAspect=" +
+        LOG_INFO("RemoteMetaSync: seeded local Image from host — maintainAspect=" +
                  std::to_string(imgMaintainAspect) + " output=" +
                  std::to_string(imgOutW) + "x" + std::to_string(imgOutH));
     }
@@ -246,11 +253,38 @@ void RemoteSourceManager::applyPendingRemoteMeta()
     // already has — Phase 4b will fetch the bundle from /meta/shader-bundle
     // and cache it locally for these cases.
     bool reloaded = false;
-    if (!preset.empty() && presetHash != m_app.m_appliedRemotePresetHash)
+    if ((preset.empty() || !shaderActive) &&
+        (m_app.m_shaderEngine->isShaderActive() || !m_app.m_ui->getCurrentShader().empty()))
     {
-        const std::string fullPath = m_app.resolveShaderPath(preset);
-        if (!fullPath.empty())
+        // The host has no shader (None, or its preset failed to load):
+        // show the stream without one too.
+        LOG_INFO("RemoteMetaSync: host has no shader, disabling the local one");
+        m_app.m_ui->setCurrentShader("");
+        m_app.m_shaderEngine->disableShader();
+        m_app.m_appliedRemotePresetHash.clear();
+    }
+    else if (shaderActive && !preset.empty() && presetHash != m_app.m_appliedRemotePresetHash)
+    {
+        // The host sends the path relative to its shaders_glsl folder.
+        // Older hosts could send an absolute host path (a profile saved
+        // with one): keep the part after "shaders_glsl/".
+        std::string rel = preset;
+        std::replace(rel.begin(), rel.end(), '\\', '/');
+        const std::string marker = "shaders_glsl/";
+        const size_t at = rel.rfind(marker);
+        if (at != std::string::npos)
+            rel = rel.substr(at + marker.size());
+        const std::string fullPath = m_app.resolveShaderPath(rel);
+        if (!fullPath.empty() && !fs::exists(fullPath))
         {
+            // Not in the local library: keep the current shader, but don't
+            // retry the same preset on every snapshot.
+            LOG_WARN("RemoteMetaSync: host preset '" + preset + "' not found locally (" + fullPath + ")");
+            m_app.m_appliedRemotePresetHash = presetHash;
+        }
+        else if (!fullPath.empty())
+        {
+            preset = rel;
             LOG_INFO("RemoteMetaSync: applying host preset '" + preset + "' (hash " + presetHash + ")");
             if (m_app.m_shaderEngine->loadPreset(fullPath))
             {
