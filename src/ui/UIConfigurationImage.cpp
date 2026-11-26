@@ -31,6 +31,16 @@ void UIConfigurationImage::render()
                       "affect what you see locally — they're not "
                       "embedded in the stream or recording.");
 
+    // Client mode: none of these apply to the host's stream (see
+    // FrameCapturePipeline::localImagePipeline()).
+    if (m_uiManager->isRemoteSource())
+    {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.8f, 0.3f, 1.0f));
+        ImGui::TextWrapped("%s", T("image.client_mode_note").c_str());
+        ImGui::PopStyleColor();
+        ImGui::Spacing();
+    }
+
     renderBrightnessContrast();
     renderSourceColor();
     renderFrameGeneration();

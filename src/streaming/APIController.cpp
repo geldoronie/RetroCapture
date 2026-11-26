@@ -1824,6 +1824,27 @@ std::string APIController::buildMetaSnapshotJSON()
     std::string presetName = m_uiManager->getCurrentShader();
     std::string presetPath = shaderEngine ? shaderEngine->getPresetPath() : "";
     std::string presetHash = presetPath.empty() ? "" : computePresetHash(presetPath);
+    // The client resolves "preset" in its own shaders_glsl folder, so send
+    // the loaded preset's path relative to ours (a profile can carry an
+    // absolute host path, which means nothing on the client).
+    if (shaderActive && !presetPath.empty())
+    {
+        auto slashes = [](std::string s)
+        {
+            std::replace(s.begin(), s.end(), '\\', '/');
+            return s;
+        };
+        const std::string full = slashes(presetPath);
+        std::string base = slashes(m_application->getShaderBasePath().string());
+        if (!base.empty() && base.back() != '/')
+            base += '/';
+        const std::string marker = "shaders_glsl/";
+        const size_t at = full.rfind(marker);
+        if (!base.empty() && full.compare(0, base.size(), base) == 0)
+            presetName = full.substr(base.size());
+        else if (at != std::string::npos)
+            presetName = full.substr(at + marker.size());
+    }
 
     std::ostringstream json;
     json << "{"

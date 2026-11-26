@@ -112,6 +112,7 @@
   "shader.active_no_params": "(Shader active but exposes no parameters)",
 
   "image.title":           "Image",
+  "image.client_mode_note": "Client mode: the stream is shown as the host sends it, with the host's shader. These settings apply again when the source is local.",
   "image.adjustments":     "Image Adjustments",
   "image.brightness":      "Brightness",
   "image.contrast":        "Contrast",

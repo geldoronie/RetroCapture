@@ -140,13 +140,21 @@ void FrameCapturePipeline::getSourceCropFractions(uint32_t srcW, uint32_t srcH,
                                                   float &top, float &bottom) const
 {
     left = right = top = bottom = 0.0f;
-    if (!m_app.m_ui || srcW == 0 || srcH == 0)
+    // Client mode: the host's picture is shown as it arrives (see
+    // localImagePipeline()), so the local crop is not applied.
+    if (!localImagePipeline() || srcW == 0 || srcH == 0)
         return;
     m_app.m_ui->getSourceCrop().fractions(srcW, srcH, left, right, top, bottom);
-    // A Remote source's texture is stored the other way up (see the
-    // shouldFlipY note below): its row 0 is the BOTTOM of the picture.
-    if (m_app.m_ui->getSourceType() == UIManager::SourceType::Remote)
-        std::swap(top, bottom);
+}
+
+bool FrameCapturePipeline::localImagePipeline() const
+{
+    // In client mode (Remote source) the picture is the host's /raw: it
+    // already carries the host's crop, color, deinterlace, denoise, upscale
+    // and frame generation, and only the host's shader is applied here. The
+    // client's own Image settings must not touch it (they stay saved for
+    // when the source is local again).
+    return m_app.m_ui && m_app.m_ui->getSourceType() != UIManager::SourceType::Remote;
 }
 
 void FrameCapturePipeline::runAutoCropSampling()
@@ -156,6 +164,14 @@ void FrameCapturePipeline::runAutoCropSampling()
     // letterbox is black on every frame; a dark scene is not a border).
     if (!m_app.m_ui || !m_app.m_frameProcessor)
         return;
+    if (!localImagePipeline())
+    {
+        // A request made in client mode is dropped, not run later.
+        int ignored = 0;
+        m_app.m_ui->takeSourceAutoCropRequest(ignored);
+        m_autoCrop.active = false;
+        return;
+    }
     int threshold = 0;
     if (m_app.m_ui->takeSourceAutoCropRequest(threshold))
     {
@@ -258,7 +274,7 @@ void FrameCapturePipeline::upscalerTarget(uint32_t refW, uint32_t refH,
         autoH = m_app.m_window ? m_app.m_window->getHeight() : m_app.m_windowHeight;
     }
     const bool fitAspect = m_app.m_maintainAspect ||
-                           (m_app.m_ui && m_app.m_ui->getOutputGeometry().forcesAspect());
+                           (localImagePipeline() && m_app.m_ui->getOutputGeometry().forcesAspect());
     m_upscalerSettings.targetSize(refW, refH, autoW, autoH, fitAspect, tw, th);
 }
 
@@ -409,7 +425,7 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
 
     // #251 — the built-in upscaler's settings, one copy for every pass of
     // this iteration (live and generated run the same stage).
-    m_upscalerSettings = m_app.m_ui ? m_app.m_ui->getUpscalerSettings() : UpscalerSettings();
+    m_upscalerSettings = localImagePipeline() ? m_app.m_ui->getUpscalerSettings() : UpscalerSettings();
 
     // #198 — identity + capture time of the live frame.
     const FrameMeta liveMeta{m_app.m_frameProcessor ? m_app.m_frameProcessor->getFrameSeq() : 0,
@@ -621,7 +637,7 @@ bool FrameCapturePipeline::renderPass(const PassSpec &spec)
             bool area = false;
             if (needsDownscale && m_app.m_ui)
             {
-                const int f = m_app.m_ui->getSourceDownscaleFilter();
+                const int f = localImagePipeline() ? m_app.m_ui->getSourceDownscaleFilter() : 0;
                 const bool whole = (shaderSrcW % fboW == 0) && (shaderSrcH % fboH == 0);
                 area = f == 2 || (f == 0 && !whole);
             }
@@ -997,7 +1013,12 @@ bool FrameCapturePipeline::renderPass(const PassSpec &spec)
     // #227 — output geometry: integer scaling / aspect override pick the
     // window rect, rotation / mirror go in as a texcoord transform. With
     // the defaults this is the previous maintain-aspect fit (or stretch).
-    const OutputGeometry geom = m_app.m_ui ? m_app.m_ui->getOutputGeometry() : OutputGeometry();
+    const OutputGeometry geom = localImagePipeline() ? m_app.m_ui->getOutputGeometry() : OutputGeometry();
+    // Brightness / contrast: in client mode the host's (it applies them
+    // after its shader, so /raw doesn't carry them), never the local ones.
+    const bool local = localImagePipeline();
+    const float brightness = local ? m_app.m_brightness : m_app.m_remoteHostBrightness;
+    const float contrast = local ? m_app.m_contrast : m_app.m_remoteHostContrast;
     const OutputGeometry::Rect winRect =
         geom.windowRect(finalRenderWidth, finalRenderHeight,
                         static_cast<int>(windowWidth), static_cast<int>(windowHeight),
@@ -1040,7 +1061,7 @@ bool FrameCapturePipeline::renderPass(const PassSpec &spec)
     // enableBlend=false pelo mesmo motivo do resize acima.
     glViewport(viewportX, viewportY, viewportWidth, viewportHeight);
     m_app.m_renderer->renderTexture(finalTexture, windowWidth, windowHeight,
-                              shouldFlipY, false, m_app.m_brightness, m_app.m_contrast,
+                              shouldFlipY, false, brightness, contrast,
                               false, finalRenderWidth, finalRenderHeight,
                               /*preserveViewport=*/true);
 
@@ -1231,7 +1252,7 @@ bool FrameCapturePipeline::renderPass(const PassSpec &spec)
                 static uint32_t postImageH     = 0;
                 const bool geomActive = geom.affectsOutputs();
                 const bool postImageActive =
-                    (m_app.m_brightness != 1.0f) || (m_app.m_contrast != 1.0f) || geomActive;
+                    (brightness != 1.0f) || (contrast != 1.0f) || geomActive;
 
                 uint32_t passW = captureTextureWidth;
                 uint32_t passH = captureTextureHeight;
@@ -1322,7 +1343,7 @@ bool FrameCapturePipeline::renderPass(const PassSpec &spec)
                             textureToCapture,
                             postImageW, postImageH,
                             /*flipY=*/false, /*enableBlend=*/false,
-                            m_app.m_brightness, m_app.m_contrast,
+                            brightness, contrast,
                             /*maintainAspect=*/false,
                             captureTextureWidth, captureTextureHeight,
                             /*preserveViewport=*/true);

@@ -72,6 +72,9 @@ A follow-up to the image pipeline.
 - **`/raw` carries frame generation and the upscale (#265, #264)**, never the
   shader, which the remote client applies itself.
 - **Virtual camera in client mode (#270).** Relay the stream you receive.
+- **Client mode shows the host's picture.** Your own Image settings (crop,
+  color, upscaler...) no longer touch the stream, and the client follows
+  every shader change on the host, including None.
 - **Fixes:** shader Rescan no longer empties the list (#273), and the Info
   panel shows the real version (#271).
 
