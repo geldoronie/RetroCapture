@@ -154,6 +154,22 @@ if [ -d "$REPO_ROOT/$BUILD_DIR/bin/assets/models" ]; then
     mkdir -p "$APP_DIR/Contents/Resources/assets"
     cp -R "$REPO_ROOT/$BUILD_DIR/bin/assets/models" "$APP_DIR/Contents/Resources/assets/"
 fi
+# #255 — MoltenVK (Vulkan on Metal) for RIFE: bundled so the RIFE method
+# works without a Vulkan install. RifeEngine tries
+# Contents/Frameworks/libMoltenVK.dylib first; without it (or a Homebrew
+# Vulkan) the RIFE method falls back to Motion.
+MVK_LIB=""
+if command -v brew >/dev/null 2>&1; then
+    MVK_PREFIX="$(brew --prefix molten-vk 2>/dev/null || true)"
+    [ -n "$MVK_PREFIX" ] && [ -f "$MVK_PREFIX/lib/libMoltenVK.dylib" ] && MVK_LIB="$MVK_PREFIX/lib/libMoltenVK.dylib"
+fi
+if [ -n "$MVK_LIB" ] && [ -d "$REPO_ROOT/$BUILD_DIR/bin/assets/models" ]; then
+    mkdir -p "$APP_DIR/Contents/Frameworks"
+    cp -L "$MVK_LIB" "$APP_DIR/Contents/Frameworks/libMoltenVK.dylib"
+    echo "   vulkan  : Contents/Frameworks/libMoltenVK.dylib (RIFE)"
+else
+    echo "   vulkan  : (no MoltenVK bundled — RIFE needs a Vulkan install or falls back to Motion)"
+fi
 # ssl/ ships templates for the optional HTTPS web portal. Include if
 # present (developer dirs only — not always populated).
 if [ -d "$REPO_ROOT/ssl" ]; then

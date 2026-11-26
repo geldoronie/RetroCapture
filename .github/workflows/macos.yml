@@ -53,15 +53,39 @@ jobs:
           HOMEBREW_NO_INSTALL_CLEANUP: '1'
           HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: '1'
         run: |
-          brew install cmake pkg-config glfw ffmpeg libpng openssl@3 || true
-          brew list --versions cmake pkg-config glfw ffmpeg libpng openssl@3
+          brew install cmake pkg-config glfw ffmpeg libpng openssl@3 molten-vk || true
+          brew list --versions cmake pkg-config glfw ffmpeg libpng openssl@3 molten-vk
 
-      # #248 — RIFE (ncnn + Vulkan/MoltenVK) is not built on macOS yet: the
-      # installed ncnn referenced the temporary simplevk.tbd from its build
-      # tree and broke the link, and the MoltenVK path is untested. macOS
-      # bundles fall back to the Motion method (#255 tracks enabling it).
+      # #255 — RIFE on macOS: ncnn (Vulkan, loaded at run time) built once
+      # per arch and cached; the bundle ships MoltenVK in
+      # Contents/Frameworks. Without a working Vulkan the RIFE method falls
+      # back to Motion at run time, as on the other platforms.
+      - name: Cache ncnn
+        id: ncnn-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/ncnn
+          key: ncnn-macos-${{ matrix.arch }}-${{ hashFiles('tools/build-ncnn.sh') }}
+
+      - name: Build ncnn
+        if: steps.ncnn-cache.outputs.cache-hit != 'true'
+        run: ./tools/build-ncnn.sh "${{ runner.temp }}/ncnn"
+
       - name: Build bundle
+        env:
+          RIFE_NCNN_DIR: ${{ runner.temp }}/ncnn
         run: ./tools/build-macos-bundle.sh --clean Release
+
+      # RifeEngine is only compiled when CMake found ncnn with Vulkan; the
+      # tarball must carry MoltenVK and the model next to the binary.
+      - name: Check RIFE in the bundle
+        run: |
+          bin="build-macos-${{ matrix.arch }}/bin/retrocapture"
+          nm "$bin" | grep -q RifeEngine || { echo "::error::RIFE was not compiled into the macOS build"; exit 1; }
+          list=$(tar -tzf dist/RetroCapture-*-macos-*.tar.gz)
+          echo "$list" | grep -q "Contents/Frameworks/libMoltenVK.dylib" || { echo "::error::MoltenVK missing from the bundle"; exit 1; }
+          echo "$list" | grep -q "models/rife-v4.6/flownet.bin" || { echo "::error::RIFE model missing from the bundle"; exit 1; }
+          echo "RIFE: engine compiled, MoltenVK and model bundled"
 
       - name: Locate tarball
         id: tarball
