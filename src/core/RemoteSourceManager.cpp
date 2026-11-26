@@ -95,6 +95,7 @@ void RemoteSourceManager::startWorker(const std::string &devicePath, const std::
     // Every connection applies the host's shader again, even the one
     // applied last time (the local shader may have changed in between).
     m_app.m_appliedRemotePresetHash.clear();
+    m_app.m_remoteShaderViewportW = m_app.m_remoteShaderViewportH = 0;
     m_app.m_remoteMetaSync = std::make_unique<RemoteMetaSync>();
     if (authToken)
         m_app.m_remoteMetaSync->setAuthToken(*authToken);
@@ -110,6 +111,8 @@ void RemoteSourceManager::stageSnapshot(const RemoteMetaSync::Snapshot &snap)
     m_app.m_pendingRemoteShaderActive    = snap.shaderActive;
     m_app.m_pendingRemoteBrightness      = snap.imageBrightness;
     m_app.m_pendingRemoteContrast        = snap.imageContrast;
+    m_app.m_pendingRemoteViewportW       = snap.viewportWidth;
+    m_app.m_pendingRemoteViewportH       = snap.viewportHeight;
     m_app.m_pendingRemotePipelineEnabled = snap.pipelineEnabled;
     m_app.m_pendingRemoteParams.clear();
     m_app.m_pendingRemoteParams.reserve(snap.parameters.size());
@@ -189,6 +192,8 @@ void RemoteSourceManager::applyPendingRemoteMeta()
         shaderActive     = m_app.m_pendingRemoteShaderActive;
         m_app.m_remoteHostBrightness = m_app.m_pendingRemoteBrightness;
         m_app.m_remoteHostContrast   = m_app.m_pendingRemoteContrast;
+        m_app.m_remoteShaderViewportW = m_app.m_pendingRemoteViewportW;
+        m_app.m_remoteShaderViewportH = m_app.m_pendingRemoteViewportH;
         params           = std::move(m_app.m_pendingRemoteParams);
         sourceW          = m_app.m_pendingRemoteSourceWidth;
         sourceH          = m_app.m_pendingRemoteSourceHeight;

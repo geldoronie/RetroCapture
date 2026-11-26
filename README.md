@@ -74,7 +74,8 @@ A follow-up to the image pipeline.
 - **Virtual camera in client mode (#270).** Relay the stream you receive.
 - **Client mode shows the host's picture.** Your own Image settings (crop,
   color, upscaler...) no longer touch the stream, and the client follows
-  every shader change on the host, including None.
+  every shader change on the host, including None. The shader renders at
+  the host's size, so it looks the same in a smaller client window.
 - **Fixes:** shader Rescan no longer empties the list (#273), and the Info
   panel shows the real version (#271).
 

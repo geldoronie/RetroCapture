@@ -564,6 +564,15 @@ bool FrameCapturePipeline::renderPass(const PassSpec &spec)
         uint32_t currentWidth = m_app.m_window ? m_app.m_window->getWidth() : m_app.m_windowWidth;
         uint32_t currentHeight = m_app.m_window ? m_app.m_window->getHeight() : m_app.m_windowHeight;
 
+        // Client mode: render the chain at the host's viewport, not this
+        // window's. Masks, scanlines and other output-size-dependent passes
+        // then look as on the host; the result is scaled to the window.
+        if (!localImagePipeline() && m_app.m_remoteShaderViewportW > 0 && m_app.m_remoteShaderViewportH > 0)
+        {
+            currentWidth = m_app.m_remoteShaderViewportW;
+            currentHeight = m_app.m_remoteShaderViewportH;
+        }
+
         // Validate dimensions before updating viewport
         if (currentWidth > 0 && currentHeight > 0 && currentWidth <= 7680 && currentHeight <= 4320)
         {
@@ -1050,6 +1059,27 @@ bool FrameCapturePipeline::renderPass(const PassSpec &spec)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     }
+    // Client mode: the chain rendered at the host's viewport, which can be
+    // much larger than this window. Plain LINEAR reads 4 texels, so a
+    // reduction past 2x aliases fine detail (scanlines, masks) into moire;
+    // a mipmapped LINEAR_MIPMAP_LINEAR draw averages it like the host's
+    // stream scaler does. The filter is restored after the draw.
+    const bool mipmapPresent = !nearestPresent && !localImagePipeline() && isShaderTexture &&
+                               (finalRenderWidth > static_cast<uint32_t>(viewportWidth) ||
+                                finalRenderHeight > static_cast<uint32_t>(viewportHeight));
+    if (mipmapPresent)
+    {
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, finalTexture);
+        if (glGetTexParameteriv)
+        {
+            glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, &prevMinFilter);
+            glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, &prevMagFilter);
+        }
+        glGenerateMipmap(GL_TEXTURE_2D);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    }
     if (geom.hasOrientation())
     {
         float uv[4];
@@ -1066,7 +1096,7 @@ bool FrameCapturePipeline::renderPass(const PassSpec &spec)
                               /*preserveViewport=*/true);
 
     m_app.m_renderer->resetUVTransform();
-    if (nearestPresent)
+    if (nearestPresent || mipmapPresent)
     {
         glBindTexture(GL_TEXTURE_2D, finalTexture);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, prevMinFilter);

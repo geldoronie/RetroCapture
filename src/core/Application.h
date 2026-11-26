@@ -344,6 +344,14 @@ private:
     float                            m_pendingRemoteContrast   = 1.0f;
     float                            m_remoteHostBrightness    = 1.0f;
     float                            m_remoteHostContrast      = 1.0f;
+    // Host's shader viewport from /meta (0 = unknown, older host). The
+    // client renders its shader chain at this size, then scales the result
+    // to its own window, so the effect matches the host whatever the size
+    // of the client's window.
+    uint32_t                         m_pendingRemoteViewportW = 0;
+    uint32_t                         m_pendingRemoteViewportH = 0;
+    uint32_t                         m_remoteShaderViewportW  = 0;
+    uint32_t                         m_remoteShaderViewportH  = 0;
 
     // Buffers reutilizáveis no caminho de captura — evita alocar ~6MB/frame a 1080p.
     // pushFrame() copia os dados, então é seguro reutilizar.

@@ -73,6 +73,13 @@ upscale, and a remote client can relay what it receives to the virtual camera.
     the host's path on the client. /meta now sends the path relative to the
     shader folder, and the client also accepts an older host's absolute path;
   - reconnecting to a host whose shader hadn't changed didn't apply it again.
+- **The shader looked different on a client with a smaller window.** The
+  chain renders at the window size, so masks and scanlines were computed for
+  the client's window instead of the host's. /meta now carries the host's
+  shader viewport; the client renders the chain at that size and scales it
+  to its window with mipmaps (no moire). Measured with crt-aperture, a host
+  at 1600x960 and a client at 800x480: 31.8 dB against the host's picture,
+  versus 17.7 dB before.
 
 ### Known limitations
 

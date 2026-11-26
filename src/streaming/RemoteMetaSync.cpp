@@ -88,6 +88,8 @@ namespace
                 out.pipelineEnabled = s.value("pipelineEnabled", true);
                 out.preset          = s.value("preset", std::string{});
                 out.presetHash      = s.value("presetHash", std::string{});
+                out.viewportWidth   = s.value("viewportWidth", 0u);
+                out.viewportHeight  = s.value("viewportHeight", 0u);
                 if (s.contains("parameters") && s["parameters"].is_array())
                 {
                     out.parameters.clear();

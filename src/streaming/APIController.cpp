@@ -1855,6 +1855,10 @@ std::string APIController::buildMetaSnapshotJSON()
          <<   "\"pipelineEnabled\": " << jsonBool(clientPipelineEnabled)                  << ", "
          <<   "\"preset\": "          << jsonString(presetName)                          << ", "
          <<   "\"presetHash\": "      << jsonString(presetHash)                          << ", "
+         // The size the chain renders at (the last pass's viewport): the
+         // client renders at the same size so the look matches.
+         <<   "\"viewportWidth\": "   << jsonNumber(shaderActive ? shaderEngine->getViewportWidth() : 0u)  << ", "
+         <<   "\"viewportHeight\": "  << jsonNumber(shaderActive ? shaderEngine->getViewportHeight() : 0u) << ", "
          <<   "\"parameters\": [";
 
     if (shaderActive)
