@@ -15,6 +15,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.10.1-alpha] - 2026-11-25
+
+Nineteenth alpha release, a follow-up to the image pipeline. RIFE frame
+generation gets twice as fast at 1080p and comes to macOS, a temporal denoise
+cleans up noisy analog sources, `/raw` now carries frame generation and the
+upscale, and a remote client can relay what it receives to the virtual camera.
+
+### Added
+
+- **Temporal denoise** (#268), in the Image window, the web portal and
+  `/api/v1/image/settings` (`temporalDenoise`, 0–1, off by default).
+  - A motion-adaptive recursive filter for noisy analog sources, such as
+    SCART/composite→HDMI converters with per-pixel noise, chroma speckle and
+    shimmer.
+  - It runs once per captured frame, right after crop, color and
+    deinterlace, so the shader chain, frame generation, the upscaler and
+    every output see the cleaned picture. It adds no latency.
+  - Measured at noise σ 8: still areas gain 5–11 dB, and moving sprites stay
+    free of ghosts. Low-contrast texture moving at the noise level softens,
+    which is why it is meant for noisy sources only.
+  - Repeat detection still reads the game's own rate on a noisy source.
+- **RIFE resolution** (#260): Auto, Full or Fast, in the Image window, the web
+  portal and the API (`rifeScale`).
+  - Above 720p, Auto runs the network on a copy of about 1280x720 and
+    restores the fine detail from the full-size Motion warp.
+  - At 1080p, inference goes from 22.6 to 11.8 ms per frame at the same
+    quality on the motion test (33.6 dB vs 33.4 dB at full size).
+- **RIFE on macOS** (#255): the Apple Silicon and Intel bundles now include
+  the RIFE engine, MoltenVK and the model.
+  - Not yet tested on a real Mac. If Vulkan can't start, RIFE shows as
+    unavailable and frame generation uses Motion.
+- **Upscale on `/raw`** (#264): a new Upscaler switch chooses whether `/raw`
+  carries the upscaled picture. It is on by default.
+- **Virtual camera in client mode** (#270): a remote client can now relay the
+  stream it receives to the virtual camera.
+
+### Fixed
+
+- **`/raw` carries frame generation and the upscale** (#265). It used to send
+  the plain capture. It still never carries the shader, which the remote
+  client applies itself.
+- **Shader Rescan emptied the shader list** when RetroCapture was started
+  outside its own folder (#273).
+- **The Info panel showed "RetroCapture v0.1.0"**; it now shows the real
+  version (#271).
+
+### Known limitations
+
+- **RIFE is not available on the ARM builds**; Motion is.
+- **A laptop client receiving 1080p can freeze**; under investigation.
+
+### Tooling
+
+- `--denoise-bench` measures the temporal denoise against clean frames, and
+  `RETROCAPTURE_TEST_NOISE=sigma` adds analog-like noise to the test source
+  (#268).
+- `--framegen-bench` takes `rifescale=`, and `tools/framegen-quality-test.sh`
+  takes `FG_RIFE_SCALE` (#260).
+- The macOS CI builds ncnn (cached) and checks that RIFE, MoltenVK and the
+  model are in the bundle (#255).
+
+---
+
 ## [0.10.0-alpha] - 2026-11-25
 
 Eighteenth alpha release: the **image pipeline**. The picture can now be
