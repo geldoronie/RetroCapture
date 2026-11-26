@@ -23,6 +23,10 @@
 
 #ifdef __APPLE__
 #include <dlfcn.h>
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#include <string>
+#endif
 #endif
 
 #include <algorithm>
@@ -434,9 +438,22 @@ RifeEngine::DeviceInfo RifeEngine::probe()
     const char *driver = nullptr;
 #ifdef __APPLE__
     // dlopen("libvulkan.dylib") does not search Homebrew's prefix on Apple
-    // Silicon; MoltenVK also works loaded directly as the driver.
+    // Silicon; MoltenVK also works loaded directly as the driver. #255 — the
+    // .app bundles MoltenVK in Contents/Frameworks: tried first, so RIFE
+    // works without a Vulkan install.
+    static std::string bundled;
     {
-        const char *cands[] = {"libvulkan.dylib",
+        char exe[4096];
+        uint32_t size = sizeof(exe);
+        if (_NSGetExecutablePath(exe, &size) == 0)
+        {
+            std::string dir(exe);
+            const size_t slash = dir.rfind('/');
+            if (slash != std::string::npos)
+                bundled = dir.substr(0, slash) + "/../Frameworks/libMoltenVK.dylib";
+        }
+        const char *cands[] = {bundled.empty() ? nullptr : bundled.c_str(),
+                               "libvulkan.dylib",
                                "libvulkan.1.dylib",
                                "/opt/homebrew/lib/libvulkan.1.dylib",
                                "/usr/local/lib/libvulkan.1.dylib",
@@ -444,6 +461,7 @@ RifeEngine::DeviceInfo RifeEngine::probe()
                                "/usr/local/lib/libMoltenVK.dylib"};
         for (const char *c : cands)
         {
+            if (!c) continue;
             if (void *h = dlopen(c, RTLD_LOCAL | RTLD_NOW))
             {
                 dlclose(h);

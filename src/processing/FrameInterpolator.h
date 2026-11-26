@@ -52,6 +52,18 @@ public:
         Motion,
         RIFE, // neural (#248); falls back to Motion frame by frame
     };
+    // #260 — the size RIFE runs at. Above 720p the network's cost (the
+    // GL<->Vulkan round trip and the inference) outgrows a 60 Hz frame, so
+    // Auto feeds it a copy scaled to ~1280x720 and scales the generated frame
+    // back up on the GPU; real frames always stay native.
+    enum class RifeScale
+    {
+        Auto, // reduced above 1280x720 (by area)
+        Full, // always the native size
+        Fast, // always reduced to ~1280x720 when larger
+    };
+    static constexpr uint32_t kRifeFastPixels = 1280u * 720u;
+
     struct Options
     {
         Method method = Method::Motion;
@@ -89,6 +101,14 @@ public:
      * feeding it (the model stays loaded until destroy()).
      */
     void setMethodHint(Method m);
+    /** #260 — RIFE input size policy; a change restarts the pair. */
+    void setRifeScale(RifeScale s);
+    RifeScale rifeScale() const { return m_rifeScale; }
+    /** Size the network runs at (0 x 0 before the first frame). */
+    uint32_t rifeWidth() const { return m_rifeW; }
+    uint32_t rifeHeight() const { return m_rifeH; }
+    /** The reduced size for w x h under s; false = native. */
+    static bool rifeReducedSize(RifeScale s, uint32_t w, uint32_t h, uint32_t &rw, uint32_t &rh);
     RifeBackend &rife() { return m_rife; }
     /**
      * RIFE: schedule phases 1/n .. (n-1)/n of the current pair up front, so
@@ -245,6 +265,15 @@ private:
 
     RifeBackend m_rife;
     bool m_rifeWanted = false;
+    RifeScale m_rifeScale = RifeScale::Auto;
+    Target m_rifeIn;  // #260 — reduced copy of a real frame for the network
+    Target m_rifeRes; // ... and the reduced generated frame before scaling up
+    Target m_rifeMotion;      // full-size Motion frame (detail source)
+    Target m_rifeMotionSmall; // ... reduced like the network input
+    GLuint m_progRifeDetail = 0;
+    void drawWarp(float tc, const Options &opt, bool motion, const Target &dst);
+    void upscaleRife(float tc, const Options &opt);
+    uint32_t m_rifeW = 0, m_rifeH = 0; // size of the frames sent to RIFE
     bool m_lastRife = false;
 
     bool m_filterLinear = false;

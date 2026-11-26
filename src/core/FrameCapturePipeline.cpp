@@ -140,13 +140,21 @@ void FrameCapturePipeline::getSourceCropFractions(uint32_t srcW, uint32_t srcH,
                                                   float &top, float &bottom) const
 {
     left = right = top = bottom = 0.0f;
-    if (!m_app.m_ui || srcW == 0 || srcH == 0)
+    // Client mode: the host's picture is shown as it arrives (see
+    // localImagePipeline()), so the local crop is not applied.
+    if (!localImagePipeline() || srcW == 0 || srcH == 0)
         return;
     m_app.m_ui->getSourceCrop().fractions(srcW, srcH, left, right, top, bottom);
-    // A Remote source's texture is stored the other way up (see the
-    // shouldFlipY note below): its row 0 is the BOTTOM of the picture.
-    if (m_app.m_ui->getSourceType() == UIManager::SourceType::Remote)
-        std::swap(top, bottom);
+}
+
+bool FrameCapturePipeline::localImagePipeline() const
+{
+    // In client mode (Remote source) the picture is the host's /raw: it
+    // already carries the host's crop, color, deinterlace, denoise, upscale
+    // and frame generation, and only the host's shader is applied here. The
+    // client's own Image settings must not touch it (they stay saved for
+    // when the source is local again).
+    return m_app.m_ui && m_app.m_ui->getSourceType() != UIManager::SourceType::Remote;
 }
 
 void FrameCapturePipeline::runAutoCropSampling()
@@ -156,6 +164,14 @@ void FrameCapturePipeline::runAutoCropSampling()
     // letterbox is black on every frame; a dark scene is not a border).
     if (!m_app.m_ui || !m_app.m_frameProcessor)
         return;
+    if (!localImagePipeline())
+    {
+        // A request made in client mode is dropped, not run later.
+        int ignored = 0;
+        m_app.m_ui->takeSourceAutoCropRequest(ignored);
+        m_autoCrop.active = false;
+        return;
+    }
     int threshold = 0;
     if (m_app.m_ui->takeSourceAutoCropRequest(threshold))
     {
@@ -258,7 +274,7 @@ void FrameCapturePipeline::upscalerTarget(uint32_t refW, uint32_t refH,
         autoH = m_app.m_window ? m_app.m_window->getHeight() : m_app.m_windowHeight;
     }
     const bool fitAspect = m_app.m_maintainAspect ||
-                           (m_app.m_ui && m_app.m_ui->getOutputGeometry().forcesAspect());
+                           (localImagePipeline() && m_app.m_ui->getOutputGeometry().forcesAspect());
     m_upscalerSettings.targetSize(refW, refH, autoW, autoH, fitAspect, tw, th);
 }
 
@@ -281,6 +297,42 @@ GLuint FrameCapturePipeline::runUpscaler(UpscalerSettings::Position where, GLuin
     if (out != tex)
         m_upscalerRan = true;
     return out;
+}
+
+bool FrameCapturePipeline::readTextureRGB(GLuint tex, uint32_t w, uint32_t h, std::vector<uint8_t> &out)
+{
+    // Synchronous readback of a pre-shader texture for /raw and the
+    // apply-shader-off outputs.
+    if (!tex || w == 0 || h == 0)
+        return false;
+    bool ok = false;
+    GLuint tmpFBO = 0;
+    glGenFramebuffers(1, &tmpFBO);
+    GLint prevFBO = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFBO);
+    glBindFramebuffer(GL_FRAMEBUFFER, tmpFBO);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE)
+    {
+        const size_t rowUnpadded = static_cast<size_t>(w) * 3;
+        const size_t rowPadded = ((rowUnpadded + 3) / 4) * 4;
+        m_app.m_captureSourcePadded.resize(rowPadded * h);
+        glReadPixels(0, 0, static_cast<GLsizei>(w), static_cast<GLsizei>(h), GL_RGB, GL_UNSIGNED_BYTE,
+                     m_app.m_captureSourcePadded.data());
+        // #187 — keep glReadPixels' native bottom-up order (do NOT flip),
+        // only strip the row padding. The shaded path (frameData) is read via
+        // PBO with flipY=false (also bottom-up) and records/streams correctly;
+        // this buffer feeds the same encoders (recording, /stream, /raw), so it
+        // must match that orientation. The old vertical flip here produced
+        // upside-down recording whenever apply-shader was OFF.
+        out.resize(rowUnpadded * h);
+        for (uint32_t row = 0; row < h; ++row)
+            memcpy(out.data() + row * rowUnpadded, m_app.m_captureSourcePadded.data() + row * rowPadded, rowUnpadded);
+        ok = true;
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, prevFBO);
+    glDeleteFramebuffers(1, &tmpFBO);
+    return ok;
 }
 
 bool FrameCapturePipeline::renderAndDistributeFrame()
@@ -373,7 +425,7 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
 
     // #251 — the built-in upscaler's settings, one copy for every pass of
     // this iteration (live and generated run the same stage).
-    m_upscalerSettings = m_app.m_ui ? m_app.m_ui->getUpscalerSettings() : UpscalerSettings();
+    m_upscalerSettings = localImagePipeline() ? m_app.m_ui->getUpscalerSettings() : UpscalerSettings();
 
     // #198 — identity + capture time of the live frame.
     const FrameMeta liveMeta{m_app.m_frameProcessor ? m_app.m_frameProcessor->getFrameSeq() : 0,
@@ -414,7 +466,11 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
         gen.stream = plan.genStream;
         gen.record = plan.genRecord;
         gen.virtcam = plan.genVirtcam;
-        gen.raw = false;
+        // /raw is pre-shader, not pre-frame-generation: with frame
+        // generation on the stream it carries the generated timeline too
+        // (the generated frames are made from the cropped source, before the
+        // shader chain and the upscaler).
+        gen.raw = plan.genStream;
         if (!m_genPbo)
             m_genPbo = std::make_unique<PBOManager>();
         gen.pbo = m_genPbo.get();
@@ -424,7 +480,7 @@ bool FrameCapturePipeline::renderAndDistributeFrame()
         live.stream = plan.liveStream;
         live.record = plan.liveRecord;
         live.virtcam = plan.liveVirtcam;
-        live.raw = true;
+        live.raw = !plan.genStream;
         const bool liveNeeded = live.window || plan.liveOutputsActive;
 
         // The chain's temporal state (FrameCount, feedback, history) follows
@@ -486,6 +542,13 @@ bool FrameCapturePipeline::renderPass(const PassSpec &spec)
     // #251 — set by runUpscaler() when the upscaler produced this pass's image.
     m_upscalerRan = false;
 
+    // The picture without the shader chain: what /raw (and a stream /
+    // recording with apply-shader off) carries. The cropped source, or the
+    // upscaler's output when it runs before the chain (#251) — /raw keeps
+    // the upscale, only the shader is left to the client.
+    GLuint preShaderTex = sourceTex;
+    uint32_t preShaderW = sourceW, preShaderH = sourceH;
+
     // Master toggle: when the user disables the shader pipeline
     // from the Shader tab we keep the loaded preset / parameters
     // intact but stop running the chain on the live render. The
@@ -500,6 +563,15 @@ bool FrameCapturePipeline::renderPass(const PassSpec &spec)
         // IMPORTANT: Validate dimensions before updating viewport to avoid issues during resize
         uint32_t currentWidth = m_app.m_window ? m_app.m_window->getWidth() : m_app.m_windowWidth;
         uint32_t currentHeight = m_app.m_window ? m_app.m_window->getHeight() : m_app.m_windowHeight;
+
+        // Client mode: render the chain at the host's viewport, not this
+        // window's. Masks, scanlines and other output-size-dependent passes
+        // then look as on the host; the result is scaled to the window.
+        if (!localImagePipeline() && m_app.m_remoteShaderViewportW > 0 && m_app.m_remoteShaderViewportH > 0)
+        {
+            currentWidth = m_app.m_remoteShaderViewportW;
+            currentHeight = m_app.m_remoteShaderViewportH;
+        }
 
         // Validate dimensions before updating viewport
         if (currentWidth > 0 && currentHeight > 0 && currentWidth <= 7680 && currentHeight <= 4320)
@@ -574,7 +646,7 @@ bool FrameCapturePipeline::renderPass(const PassSpec &spec)
             bool area = false;
             if (needsDownscale && m_app.m_ui)
             {
-                const int f = m_app.m_ui->getSourceDownscaleFilter();
+                const int f = localImagePipeline() ? m_app.m_ui->getSourceDownscaleFilter() : 0;
                 const bool whole = (shaderSrcW % fboW == 0) && (shaderSrcH % fboH == 0);
                 area = f == 2 || (f == 0 && !whole);
             }
@@ -623,6 +695,12 @@ bool FrameCapturePipeline::renderPass(const PassSpec &spec)
         const uint32_t nativeW = shaderSrcW, nativeH = shaderSrcH;
         shaderSrcTex = runUpscaler(UpscalerSettings::Position::Before, shaderSrcTex,
                                    shaderSrcW, shaderSrcH, nativeW, nativeH);
+        if (m_upscalerRan)
+        {
+            preShaderTex = shaderSrcTex;
+            preShaderW = shaderSrcW;
+            preShaderH = shaderSrcH;
+        }
         if (m_app.m_upscaler && nativeW > 0 && nativeH > 0 &&
             UpscalerStage::runsAt(m_upscalerSettings, UpscalerSettings::Position::After))
         {
@@ -944,7 +1022,12 @@ bool FrameCapturePipeline::renderPass(const PassSpec &spec)
     // #227 — output geometry: integer scaling / aspect override pick the
     // window rect, rotation / mirror go in as a texcoord transform. With
     // the defaults this is the previous maintain-aspect fit (or stretch).
-    const OutputGeometry geom = m_app.m_ui ? m_app.m_ui->getOutputGeometry() : OutputGeometry();
+    const OutputGeometry geom = localImagePipeline() ? m_app.m_ui->getOutputGeometry() : OutputGeometry();
+    // Brightness / contrast: in client mode the host's (it applies them
+    // after its shader, so /raw doesn't carry them), never the local ones.
+    const bool local = localImagePipeline();
+    const float brightness = local ? m_app.m_brightness : m_app.m_remoteHostBrightness;
+    const float contrast = local ? m_app.m_contrast : m_app.m_remoteHostContrast;
     const OutputGeometry::Rect winRect =
         geom.windowRect(finalRenderWidth, finalRenderHeight,
                         static_cast<int>(windowWidth), static_cast<int>(windowHeight),
@@ -976,6 +1059,27 @@ bool FrameCapturePipeline::renderPass(const PassSpec &spec)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     }
+    // Client mode: the chain rendered at the host's viewport, which can be
+    // much larger than this window. Plain LINEAR reads 4 texels, so a
+    // reduction past 2x aliases fine detail (scanlines, masks) into moire;
+    // a mipmapped LINEAR_MIPMAP_LINEAR draw averages it like the host's
+    // stream scaler does. The filter is restored after the draw.
+    const bool mipmapPresent = !nearestPresent && !localImagePipeline() && isShaderTexture &&
+                               (finalRenderWidth > static_cast<uint32_t>(viewportWidth) ||
+                                finalRenderHeight > static_cast<uint32_t>(viewportHeight));
+    if (mipmapPresent)
+    {
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, finalTexture);
+        if (glGetTexParameteriv)
+        {
+            glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, &prevMinFilter);
+            glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, &prevMagFilter);
+        }
+        glGenerateMipmap(GL_TEXTURE_2D);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    }
     if (geom.hasOrientation())
     {
         float uv[4];
@@ -987,12 +1091,12 @@ bool FrameCapturePipeline::renderPass(const PassSpec &spec)
     // enableBlend=false pelo mesmo motivo do resize acima.
     glViewport(viewportX, viewportY, viewportWidth, viewportHeight);
     m_app.m_renderer->renderTexture(finalTexture, windowWidth, windowHeight,
-                              shouldFlipY, false, m_app.m_brightness, m_app.m_contrast,
+                              shouldFlipY, false, brightness, contrast,
                               false, finalRenderWidth, finalRenderHeight,
                               /*preserveViewport=*/true);
 
     m_app.m_renderer->resetUVTransform();
-    if (nearestPresent)
+    if (nearestPresent || mipmapPresent)
     {
         glBindTexture(GL_TEXTURE_2D, finalTexture);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, prevMinFilter);
@@ -1178,7 +1282,7 @@ bool FrameCapturePipeline::renderPass(const PassSpec &spec)
                 static uint32_t postImageH     = 0;
                 const bool geomActive = geom.affectsOutputs();
                 const bool postImageActive =
-                    (m_app.m_brightness != 1.0f) || (m_app.m_contrast != 1.0f) || geomActive;
+                    (brightness != 1.0f) || (contrast != 1.0f) || geomActive;
 
                 uint32_t passW = captureTextureWidth;
                 uint32_t passH = captureTextureHeight;
@@ -1269,7 +1373,7 @@ bool FrameCapturePipeline::renderPass(const PassSpec &spec)
                             textureToCapture,
                             postImageW, postImageH,
                             /*flipY=*/false, /*enableBlend=*/false,
-                            m_app.m_brightness, m_app.m_contrast,
+                            brightness, contrast,
                             /*maintainAspect=*/false,
                             captureTextureWidth, captureTextureHeight,
                             /*preserveViewport=*/true);
@@ -1631,10 +1735,19 @@ bool FrameCapturePipeline::renderPass(const PassSpec &spec)
                         // single-readback path.
                         const bool masterOn = (m_app.m_ui && m_app.m_ui->getShaderPipelineEnabled());
                         const bool shaderActive = (m_app.m_shaderEngine && m_app.m_shaderEngine->isShaderActive());
-                        // #251 — the output is processed (shader chain and / or the
-                        // upscaler): /raw and an apply-shader-off stream / recording
-                        // then need the separate pre-shader source readback.
-                        const bool processed = (masterOn && shaderActive) || m_upscalerRan;
+                        // #251 — the output went through the shader chain: /raw and an
+                        // apply-shader-off stream / recording then need the separate
+                        // pre-shader readback. The upscaler alone isn't a reason: the
+                        // upscaled picture is then the output itself.
+                        const bool processed = masterOn && shaderActive;
+                        // #264 — /raw with the upscaler off for it: the cropped source.
+                        const bool rawUpscaled = m_upscalerSettings.raw;
+                        const GLuint rawTex = rawUpscaled ? preShaderTex : sourceTex;
+                        const uint32_t rawTexW = rawUpscaled ? preShaderW : sourceW;
+                        const uint32_t rawTexH = rawUpscaled ? preShaderH : sourceH;
+                        // The output (frameData) is /raw's picture only without the
+                        // chain, and with the upscaler either off or wanted on /raw.
+                        const bool rawNeedsReadback = processed || (m_upscalerRan && !rawUpscaled);
                         const bool streamWantsSource = m_app.m_ui && passStream &&
                                                        !m_app.m_ui->getStreamingApplyShader();
                         const bool recordWantsSource = m_app.m_ui && passRecord &&
@@ -1643,7 +1756,8 @@ bool FrameCapturePipeline::renderPass(const PassSpec &spec)
                         // /raw client also triggers the source-frame capture below.
                         const bool rawWantsSource = passRaw && m_app.m_streamManager->hasRawClients();
                         const bool needSourceCapture = processed &&
-                                                       (streamWantsSource || recordWantsSource || rawWantsSource);
+                                                       (streamWantsSource || recordWantsSource ||
+                                                        (rawWantsSource && rawTex == preShaderTex));
 
                         bool sourceFrameReady = false;
                         uint32_t sourceFrameW = 0, sourceFrameH = 0;
@@ -1651,43 +1765,30 @@ bool FrameCapturePipeline::renderPass(const PassSpec &spec)
                         {
                             // #224 — /raw carries the source crop: read the
                             // pre-pass texture, not the raw capture texture.
-                            GLuint srcTex = sourceTex;
-                            sourceFrameW = sourceW;
-                            sourceFrameH = sourceH;
-                            if (srcTex && sourceFrameW > 0 && sourceFrameH > 0)
+                            sourceFrameW = preShaderW;
+                            sourceFrameH = preShaderH;
+                            sourceFrameReady = readTextureRGB(preShaderTex, sourceFrameW, sourceFrameH,
+                                                              m_app.m_captureSourceFrameData);
+                        }
+
+                        // #264 — /raw's own picture when it differs from the one above:
+                        // the upscaler is off for /raw (the remote client upscales), so
+                        // it takes the cropped source instead of the upscaled picture.
+                        const std::vector<uint8_t> *rawData = nullptr;
+                        uint32_t rawW = 0, rawH = 0;
+                        if (rawWantsSource && rawNeedsReadback)
+                        {
+                            if (rawTex == preShaderTex && sourceFrameReady)
                             {
-                                GLuint tmpFBO = 0;
-                                glGenFramebuffers(1, &tmpFBO);
-                                GLint prevFBO = 0;
-                                glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFBO);
-                                glBindFramebuffer(GL_FRAMEBUFFER, tmpFBO);
-                                glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, srcTex, 0);
-                                if (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE)
-                                {
-                                    const size_t rowUnpadded = static_cast<size_t>(sourceFrameW) * 3;
-                                    const size_t rowPadded = ((rowUnpadded + 3) / 4) * 4;
-                                    m_app.m_captureSourcePadded.resize(rowPadded * sourceFrameH);
-                                    glReadPixels(0, 0, static_cast<GLsizei>(sourceFrameW),
-                                                 static_cast<GLsizei>(sourceFrameH),
-                                                 GL_RGB, GL_UNSIGNED_BYTE, m_app.m_captureSourcePadded.data());
-                                    // #187 — keep glReadPixels' native bottom-up order (do NOT flip),
-                                    // only strip the row padding. The shaded path (frameData) is read via
-                                    // PBO with flipY=false (also bottom-up) and records/streams correctly;
-                                    // this raw-source buffer feeds the same encoders (recording, /stream,
-                                    // /raw), so it must match that orientation. The old vertical flip here
-                                    // produced upside-down recording whenever apply-shader was OFF.
-                                    m_app.m_captureSourceFrameData.resize(rowUnpadded * sourceFrameH);
-                                    for (uint32_t row = 0; row < sourceFrameH; ++row)
-                                    {
-                                        const uint32_t srcRow = row;
-                                        const uint8_t *s = m_app.m_captureSourcePadded.data() + srcRow * rowPadded;
-                                        uint8_t *d = m_app.m_captureSourceFrameData.data() + row * rowUnpadded;
-                                        memcpy(d, s, rowUnpadded);
-                                    }
-                                    sourceFrameReady = true;
-                                }
-                                glBindFramebuffer(GL_FRAMEBUFFER, prevFBO);
-                                glDeleteFramebuffers(1, &tmpFBO);
+                                rawData = &m_app.m_captureSourceFrameData;
+                                rawW = sourceFrameW;
+                                rawH = sourceFrameH;
+                            }
+                            else if (readTextureRGB(rawTex, rawTexW, rawTexH, m_rawSourceData))
+                            {
+                                rawData = &m_rawSourceData;
+                                rawW = rawTexW;
+                                rawH = rawTexH;
                             }
                         }
 
@@ -1765,12 +1866,12 @@ bool FrameCapturePipeline::renderPass(const PassSpec &spec)
                             //     stop while audio kept flowing).
                             if (passRaw && m_app.m_streamManager->hasRawClients())
                             {
-                                if (sourceFrameReady && curMeta.seq != m_lastRawSeq)
+                                if (rawData && curMeta.streamOk && curMeta.seq != m_lastRawSeq)
                                 {
                                     m_lastRawSeq = curMeta.seq;
-                                    m_app.m_streamManager->pushRawFrame(m_app.m_captureSourceFrameData.data(), sourceFrameW, sourceFrameH, curMeta.tsUs);
+                                    m_app.m_streamManager->pushRawFrame(rawData->data(), rawW, rawH, curMeta.tsUs);
                                 }
-                                else if (!sourceFrameReady && !processed &&
+                                else if (!rawNeedsReadback && dataMeta.streamOk &&
                                          dataMeta.seq != m_lastRawSeq)
                                 {
                                     m_lastRawSeq = dataMeta.seq;

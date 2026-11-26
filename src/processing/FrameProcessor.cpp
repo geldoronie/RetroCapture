@@ -32,6 +32,7 @@ FrameProcessor::~FrameProcessor()
 {
     deleteTexture();
     m_prePass.destroy();
+    m_denoiser.destroy();
     freeSwsSlices();
 }
 
@@ -105,7 +106,7 @@ bool FrameProcessor::processFrame(IVideoCapture *capture)
         // change shows without waiting for the next one.
         if (m_adjustDirty && m_hasValidFrame)
         {
-            runPrePass();
+            runPrePass(/*newFrame=*/false);
         }
         return false; // Nenhum frame novo disponível
     }
@@ -267,9 +268,14 @@ void FrameProcessor::setSourceAdjustments(const SourceAdjustments &adj)
         adj.gamma == m_adjust.gamma &&
         adj.deinterlace == m_adjust.deinterlace &&
         adj.fieldOrder == m_adjust.fieldOrder &&
-        adj.expandAfterDecode == m_adjust.expandAfterDecode)
+        adj.expandAfterDecode == m_adjust.expandAfterDecode &&
+        adj.temporalDenoise == m_adjust.temporalDenoise)
     {
         return;
+    }
+    if ((adj.temporalDenoise > 0.0f) != (m_adjust.temporalDenoise > 0.0f))
+    {
+        LOG_INFO(std::string("Temporal denoise: ") + (adj.temporalDenoise > 0.0f ? "on" : "off"));
     }
     if (adj.expandAfterDecode != m_adjust.expandAfterDecode)
     {
@@ -377,7 +383,7 @@ bool FrameProcessor::wantYUVFullRange() const
     }
 }
 
-void FrameProcessor::runPrePass()
+void FrameProcessor::runPrePass(bool newFrame)
 {
     m_adjustDirty = false;
 
@@ -405,14 +411,27 @@ void FrameProcessor::runPrePass()
     // #243 — independent of colorRange and of the frame format.
     p.expandAfterDecode = m_adjust.expandAfterDecode;
 
+    const GLuint raw = m_externalTexture ? m_externalTexture : m_texture;
     if (!SourcePrePass::isActive(p))
-    {
         m_processedTexture = 0; // identity: hand out the uploaded texture
+    else
+        m_processedTexture = m_prePass.apply(raw, m_textureWidth, m_textureHeight, p);
+
+    // #268 — temporal denoise on the adjusted picture, once per frame.
+    if (m_adjust.temporalDenoise <= 0.0f)
+    {
+        m_denoisedTexture = 0;
+        m_denoiser.reset();
         return;
     }
-
-    const GLuint src = m_externalTexture ? m_externalTexture : m_texture;
-    m_processedTexture = m_prePass.apply(src, m_textureWidth, m_textureHeight, p);
+    if (!newFrame)
+    {
+        // The same frame re-run with new adjustments: restart the history
+        // from it instead of averaging the frame with itself.
+        m_denoiser.reset();
+    }
+    const GLuint src = m_processedTexture ? m_processedTexture : raw;
+    m_denoisedTexture = m_denoiser.apply(src, m_textureWidth, m_textureHeight, m_adjust.temporalDenoise);
 }
 
 void FrameProcessor::deleteTexture()
@@ -426,6 +445,8 @@ void FrameProcessor::deleteTexture()
         m_hasValidFrame = false;
     }
     m_processedTexture = 0;
+    m_denoisedTexture = 0;
+    m_denoiser.reset();
     m_secondFieldPending = false;
     m_lastFrameTsUs = 0;
     m_framePeriodUs = 0;
@@ -435,6 +456,7 @@ void FrameProcessor::setTextureFilterLinear(bool linear)
 {
     m_textureFilterLinear = linear;
     m_prePass.setFilterLinear(linear);
+    m_denoiser.setFilterLinear(linear);
     // Atualizar textura existente se houver
     if (m_texture != 0)
     {

@@ -66,6 +66,8 @@ public:
     
     // Atualizar viewport (dimensões da janela)
     void setViewport(uint32_t width, uint32_t height);
+    uint32_t getViewportWidth() const { return m_viewportWidth; }
+    uint32_t getViewportHeight() const { return m_viewportHeight; }
     
     // Desabilitar shader (retorna ao renderizador básico)
     void disableShader();

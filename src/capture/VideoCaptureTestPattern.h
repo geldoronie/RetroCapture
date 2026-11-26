@@ -43,6 +43,9 @@
  *    rendered exactly: frame generation is measured against it.
  *    RETROCAPTURE_TEST_GAME_FPS=N (#256) draws a new picture only N times a
  *    second, the captures in between repeat it (a 30 fps game on 60 Hz).
+ *    RETROCAPTURE_TEST_NOISE=S (#268) adds zero-mean noise of sigma S levels,
+ *    new on every capture (repeats too), like an analog source through a
+ *    converter: measures the temporal denoise and noisy repeat detection.
  *  - "edges" (#251): a static, hard-edged pattern defined in normalised
  *    coordinates (concentric rings, a rotated checkerboard, a colour
  *    starburst), so the same pattern rendered at a higher --width/--height
@@ -101,6 +104,9 @@ private:
     Variant m_variant = Variant::Bars;
     double m_pauseRun = 0.0, m_pauseStill = 0.0; // #256: RETROCAPTURE_TEST_PAUSE
     double m_cutPeriod = 0.0; // #256: RETROCAPTURE_TEST_CUT (seconds)
+    double m_noise = 0.0;     // #268: RETROCAPTURE_TEST_NOISE (sigma, 8-bit levels)
+    uint32_t m_noiseState = 0x9E3779B9u;
+    std::vector<int8_t> m_noiseTable; // precomputed, read at a random offset per frame
     double m_gameFps = 0.0; // #256: RETROCAPTURE_TEST_GAME_FPS (0 = every frame new)
 
     uint32_t m_width = 1280;

@@ -39,6 +39,8 @@ public:
         bool                         pipelineEnabled = true;
         std::string                  preset;        // e.g. "crt/crt-mattias.glslp"
         std::string                  presetHash;
+        uint32_t                     viewportWidth   = 0; // host's shader viewport (0 = unknown)
+        uint32_t                     viewportHeight  = 0;
         std::vector<ParamOverride>   parameters;
         // source block
         uint32_t                     sourceWidth     = 0;

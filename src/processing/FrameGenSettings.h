@@ -54,6 +54,15 @@ struct FrameGenSettings
         Motion = 1,
         RIFE = 2,
     };
+    // #260 — the size RIFE runs at: Auto reduces above 720p (the network
+    // gets a ~1280x720 copy and its frame is scaled back up), Full keeps the
+    // native size, Fast always reduces.
+    enum RifeScale : int
+    {
+        RifeAuto = 0,
+        RifeFull = 1,
+        RifeFast = 2,
+    };
 
     int mode = Off;
     int method = Motion;
@@ -62,6 +71,7 @@ struct FrameGenSettings
     bool protectStatic = true;
     // Ignore captures that repeat the previous picture (#256).
     bool skipRepeats = true;
+    int rifeScale = RifeAuto;
 
     // Per-output switches: which outputs receive the generated frames.
     // An output switched off keeps the real frames with no added latency.
@@ -85,7 +95,7 @@ struct FrameGenSettings
     bool operator==(const FrameGenSettings &o) const
     {
         return mode == o.mode && method == o.method && protectStatic == o.protectStatic &&
-               skipRepeats == o.skipRepeats &&
+               skipRepeats == o.skipRepeats && rifeScale == o.rifeScale &&
                window == o.window && stream == o.stream && record == o.record &&
                virtcam == o.virtcam;
     }
@@ -122,6 +132,15 @@ struct FrameGenSettings
         if (n == "rife") return RIFE;
         return -1;
     }
+    static const char *rifeScaleName(int s) { return s == RifeFull ? "full" : (s == RifeFast ? "fast" : "auto"); }
+    static int rifeScaleFromName(const std::string &n)
+    {
+        if (n == "auto") return RifeAuto;
+        if (n == "full") return RifeFull;
+        if (n == "fast") return RifeFast;
+        return -1;
+    }
+    static int clampRifeScale(int s) { return (s >= RifeAuto && s <= RifeFast) ? s : RifeAuto; }
     static int clampMode(int m) { return (m >= Off && m <= Fill) ? m : Off; }
     static int clampMethod(int m) { return (m == Blend || m == Motion || m == RIFE) ? m : Motion; }
 };

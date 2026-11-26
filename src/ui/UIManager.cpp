@@ -64,6 +64,10 @@
 #include <fstream>
 #include <nlohmann/json.hpp>
 
+#ifndef RETROCAPTURE_VERSION
+#define RETROCAPTURE_VERSION "0.0.0-dev"
+#endif
+
 UIManager::UIManager()
     : m_creditsWindow(nullptr)
 {
@@ -646,14 +650,17 @@ void UIManager::render()
             // decoded remote /raw. Audio has a caveat (no local
             // loopback by default) that the OSD tooltip surfaces.
             toggleItem(T("menu.configurations.recording"),  m_recordingWindow.get());
+#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
+            // The virtual camera is allowed in client mode too: it carries
+            // whatever the pipeline renders, which there is the received
+            // stream, so a viewer can relay it to OBS / a video call.
+            toggleItem(T("menu.configurations.virtcam"),    m_virtcamWindow.get());
+#endif
             if (!clientMode)
             {
                 ImGui::Separator();
                 toggleItem(T("menu.configurations.source"),     m_sourceWindow.get());
                 toggleItem(T("menu.configurations.streaming"),  m_streamingWindow.get());
-#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
-                toggleItem(T("menu.configurations.virtcam"),    m_virtcamWindow.get());
-#endif
                 toggleItem(T("menu.configurations.webportal"),  m_webPortalWindow.get());
 #if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
                 toggleItem(T("menu.configurations.audio"),      m_audioWindow.get());
@@ -813,10 +820,8 @@ void UIManager::render()
         // we're a remote viewer.
         if (m_sourceWindow)    m_sourceWindow->setVisible(false);
         if (m_streamingWindow) m_streamingWindow->setVisible(false);
-#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
-        if (m_virtcamWindow)   m_virtcamWindow->setVisible(false);
-#endif
-        // Recording window stays openable in client mode (#68).
+        // Recording (#68) and virtual camera windows stay openable in
+        // client mode: both carry the received stream.
         if (m_webPortalWindow) m_webPortalWindow->setVisible(false);
 #if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
         if (m_audioWindow)     m_audioWindow->setVisible(false);
@@ -1664,7 +1669,8 @@ void UIManager::renderInfoPanel()
 
     ImGui::Separator();
     ImGui::Text("Application Info");
-    ImGui::Text("RetroCapture v0.1.0");
+    // The project version from CMake (was a hard-coded "v0.1.0").
+    ImGui::Text("RetroCapture v%s", RETROCAPTURE_VERSION);
     ImGui::Text("ImGui: %s", ImGui::GetVersion());
 }
 
@@ -2969,6 +2975,11 @@ void UIManager::loadConfig()
                 g.protectStatic = fg["protectStatic"].get<bool>();
             if (fg.contains("skipRepeats") && fg["skipRepeats"].is_boolean())
                 g.skipRepeats = fg["skipRepeats"].get<bool>();
+            if (fg.contains("rifeScale") && fg["rifeScale"].is_string())
+            {
+                const int s = FrameGenSettings::rifeScaleFromName(fg["rifeScale"].get<std::string>());
+                if (s >= 0) g.rifeScale = s;
+            }
             if (fg.contains("outputs") && fg["outputs"].is_object())
             {
                 auto &o = fg["outputs"];
@@ -2994,6 +3005,8 @@ void UIManager::loadConfig()
                 m_saturation = image["saturation"].get<float>();
             if (image.contains("gamma"))
                 m_gamma = image["gamma"].get<float>();
+            if (image.contains("temporalDenoise") && image["temporalDenoise"].is_number())
+                setTemporalDenoise(image["temporalDenoise"].get<float>());
             if (image.contains("colorRange"))
                 setColorRange(image["colorRange"].get<int>());
             if (image.contains("expandLimitedAfterDecode"))
@@ -3527,6 +3540,7 @@ void UIManager::saveConfig()
                 {"method", FrameGenSettings::methodName(g.method)},
                 {"protectStatic", g.protectStatic},
                 {"skipRepeats", g.skipRepeats},
+                {"rifeScale", FrameGenSettings::rifeScaleName(g.rifeScale)},
                 {"outputs", {
                     {"window", g.window},
                     {"stream", g.stream},
@@ -3543,6 +3557,7 @@ void UIManager::saveConfig()
             {"gamma", m_gamma},
             {"colorRange", m_colorRange},
             {"expandLimitedAfterDecode", m_expandLimitedAfterDecode},
+            {"temporalDenoise", m_temporalDenoise},
             {"downscaleFilter", m_sourceDownscaleFilter},
             {"maintainAspect", m_maintainAspect},
             {"fullscreen", m_fullscreen},

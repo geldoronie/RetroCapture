@@ -2,6 +2,7 @@
 
 #include "../renderer/glad_loader.h"
 #include "SourcePrePass.h"
+#include "TemporalDenoiser.h"
 #include <cstdint>
 #include <vector>
 
@@ -48,6 +49,7 @@ public:
     // so the shader chain and every output see the corrected image.
     GLuint getTexture() const
     {
+        if (m_denoisedTexture) return m_denoisedTexture;
         if (m_processedTexture) return m_processedTexture;
         return m_externalTexture ? m_externalTexture : m_texture;
     }
@@ -142,11 +144,15 @@ private:
     bool m_adjustDirty = false;
     SourcePrePass m_prePass;
     GLuint m_processedTexture = 0; // m_prePass output, 0 = pass bypassed
+    TemporalDenoiser m_denoiser;   // #268
+    GLuint m_denoisedTexture = 0;  // m_denoiser output, 0 = off
     bool m_lastFrameWasYUV = false;
     int m_reportedColorRange = 0;  // capture's quantization hint
     bool m_swsFullRange = false;   // YUV range the sws context decodes
 
-    void runPrePass();
+    // newFrame = false: the same frame again (adjustments changed while the
+    // source is idle), which must not advance the denoiser's history.
+    void runPrePass(bool newFrame = true);
     bool wantYUVFullRange() const;
 
     // #229 — deinterlacing. Bob shows the first field when the frame

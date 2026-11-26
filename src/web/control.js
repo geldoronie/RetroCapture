@@ -1072,6 +1072,7 @@ async function loadImageSettings() {
         // #228 — source colour controls
         setSliderWithBadge('saturation', settings.saturation !== undefined ? settings.saturation : 1);
         setSliderWithBadge('gamma', settings.gamma !== undefined ? settings.gamma : 1);
+        setSliderWithBadge('temporalDenoise', settings.temporalDenoise !== undefined ? settings.temporalDenoise : 0);
         const colorRangeEl = document.getElementById('colorRange');
         if (colorRangeEl) {
             colorRangeEl.value = settings.colorRange || 'auto';
@@ -1173,6 +1174,7 @@ async function updateImageSettings() {
             contrast: contrastEl ? parseFloat(contrastEl.value) : 1,
             saturation: document.getElementById('saturation') ? parseFloat(document.getElementById('saturation').value) : 1,
             gamma: document.getElementById('gamma') ? parseFloat(document.getElementById('gamma').value) : 1,
+            temporalDenoise: document.getElementById('temporalDenoise') ? parseFloat(document.getElementById('temporalDenoise').value) : 0,
             colorRange: document.getElementById('colorRange') ? document.getElementById('colorRange').value : 'auto',
             maintainAspect: maintainAspectEl ? maintainAspectEl.checked : false,
             fullscreen: fullscreenEl ? fullscreenEl.checked : false,
@@ -1201,6 +1203,7 @@ async function updateImageSettings() {
             contrast: settings.contrast,
             saturation: settings.saturation,
             gamma: settings.gamma,
+            temporalDenoise: settings.temporalDenoise,
             colorRange: settings.colorRange,
             expandLimitedAfterDecode: settings.expandLimitedAfterDecode,
             downscaleFilter: settings.downscaleFilter,
@@ -1599,7 +1602,7 @@ document.addEventListener('DOMContentLoaded', function() {
         contrast.addEventListener('change', updateImageSettingsDebounced);
     }
     // #228 — source colour controls
-    ['saturation', 'gamma'].forEach(function(id) {
+    ['saturation', 'gamma', 'temporalDenoise'].forEach(function(id) {
         const el = document.getElementById(id);
         if (!el) return;
         el.addEventListener('input', function() {
@@ -2789,7 +2792,8 @@ function renderFrameGenStatus(data) {
         } else if (rife.state === 'loading') {
             note = tr('web.config.image.framegen_rife_loading', 'RIFE: loading the model (Motion meanwhile)');
         } else if (rife.state === 'ready') {
-            note = 'RIFE: ' + rife.device + ', ' + rife.inferMs.toFixed(1) + ' ms/frame, ' + rife.late + ' late';
+            note = 'RIFE: ' + rife.device + (rife.width ? ' @ ' + rife.width + 'x' + rife.height : '') + ', ' +
+                rife.inferMs.toFixed(1) + ' ms/frame, ' + rife.late + ' late';
         }
         if (note) el.textContent = (el.textContent ? el.textContent + ' — ' : '') + note;
     }
@@ -2802,6 +2806,10 @@ function applyFrameGenToForm(data) {
     const protectEl = document.getElementById('frameGenProtectStatic');
     if (modeEl) modeEl.value = data.mode || 'off';
     if (methodEl) methodEl.value = data.method || 'motion';
+    const scaleEl = document.getElementById('frameGenRifeScale');
+    if (scaleEl) scaleEl.value = data.rifeScale || 'auto';
+    const scaleGroup = document.getElementById('frameGenRifeScaleGroup');
+    if (scaleGroup) scaleGroup.classList.toggle('d-none', (data.method || 'motion') !== 'rife');
     if (protectEl) protectEl.checked = !!data.protectStatic;
     const skipEl = document.getElementById('frameGenSkipRepeats');
     if (skipEl) skipEl.checked = data.skipRepeats !== false;
@@ -2841,6 +2849,7 @@ async function commitFrameGeneration() {
             method: methodEl.value,
             protectStatic: protectEl ? protectEl.checked : true,
             skipRepeats: (document.getElementById('frameGenSkipRepeats') || {checked: true}).checked,
+            rifeScale: (document.getElementById('frameGenRifeScale') || {value: 'auto'}).value,
             outputs,
         }));
     } catch (err) {
@@ -2851,7 +2860,7 @@ async function commitFrameGeneration() {
 document.addEventListener('DOMContentLoaded', () => {
     const modeEl = document.getElementById('frameGenMode');
     if (!modeEl) return;
-    const ids = ['frameGenMode', 'frameGenMethod', 'frameGenProtectStatic', 'frameGenSkipRepeats', ...Object.keys(FRAMEGEN_OUTPUTS)];
+    const ids = ['frameGenMode', 'frameGenMethod', 'frameGenRifeScale', 'frameGenProtectStatic', 'frameGenSkipRepeats', ...Object.keys(FRAMEGEN_OUTPUTS)];
     for (const id of ids) {
         const el = document.getElementById(id);
         if (el) el.addEventListener('change', commitFrameGeneration);
@@ -2894,6 +2903,8 @@ async function loadUpscaler() {
         set('upscalerCustomHeight', up.customHeight);
         set('upscalerSharpness', up.sharpness);
         set('upscalerPosition', up.position);
+        const raw = document.getElementById('upscalerRaw');
+        if (raw && up.raw !== undefined) raw.checked = !!up.raw;
         syncUpscalerControls();
     } catch (err) {
         console.warn('Failed to load upscaler settings:', err);
@@ -2910,6 +2921,8 @@ async function commitUpscaler() {
         sharpness: parseFloat(val('upscalerSharpness')),
         position: val('upscalerPosition')
     };
+    const raw = document.getElementById('upscalerRaw');
+    if (raw) up.raw = raw.checked;
     try {
         await api.setImageSettings({ upscaler: up });
     } catch (err) {
@@ -2919,7 +2932,7 @@ async function commitUpscaler() {
 
 document.addEventListener('DOMContentLoaded', () => {
     const ids = ['upscalerMode', 'upscalerTarget', 'upscalerCustomWidth',
-                 'upscalerCustomHeight', 'upscalerSharpness', 'upscalerPosition'];
+                 'upscalerCustomHeight', 'upscalerSharpness', 'upscalerPosition', 'upscalerRaw'];
     let present = false;
     ids.forEach(function(id) {
         const el = document.getElementById(id);

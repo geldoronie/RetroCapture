@@ -63,6 +63,8 @@ struct SourceAdjustments
     // colorRange. For grabbers that ignore the HDMI quantization flag and
     // put limited-range RGB inside a limited-range YUV signal.
     bool expandAfterDecode = false;
+    // #268 — temporal denoise strength, 0 = off .. 1 (see TemporalDenoiser).
+    float temporalDenoise = 0.0f;
 };
 
 /**

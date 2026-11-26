@@ -31,6 +31,13 @@ bool VideoCaptureTestPattern::open(const std::string & /*device*/)
         LOG_INFO("VideoCaptureTestPattern: 'motion' variant (scrolling background, sprites, static HUD)");
     if (const char *cs = std::getenv("RETROCAPTURE_TEST_CUT"))
         m_cutPeriod = std::atof(cs);
+    if (const char *ns = std::getenv("RETROCAPTURE_TEST_NOISE"))
+    {
+        m_noise = std::atof(ns);
+        if (m_noise > 0.0)
+            LOG_INFO("VideoCaptureTestPattern: analog-like noise, sigma " + std::to_string(m_noise) +
+                     " levels, new on every capture");
+    }
     if (const char *ps = std::getenv("RETROCAPTURE_TEST_PAUSE"))
         std::sscanf(ps, "%lf,%lf", &m_pauseRun, &m_pauseStill);
     if (const char *g = std::getenv("RETROCAPTURE_TEST_GAME_FPS"))
@@ -374,6 +381,49 @@ void VideoCaptureTestPattern::renderPattern(uint64_t f, int64_t timestampUs)
             const size_t n = static_cast<size_t>(m_width) * m_height * 3;
             for (size_t i = 0; i < n; ++i)
                 m_buffer[i] = static_cast<uint8_t>(255 - m_buffer[i]);
+        }
+        // RETROCAPTURE_TEST_NOISE=sigma (#268): zero-mean noise, new on every
+        // capture (repeated pictures too), like an analog source through a
+        // converter: a luma part shared by the channels plus chroma speckle.
+        // Sum of 4 uniforms ~ Gaussian (xorshift32). Generating it per pixel
+        // per frame costs more than a capture period at 60 fps, so a table
+        // of a few frames' worth is built once and read from a random offset
+        // (3-aligned, so each pixel keeps its luma / chroma structure).
+        if (m_noise > 0.0)
+        {
+            const size_t n = static_cast<size_t>(m_width) * m_height * 3;
+            const size_t slack = 3 * 65536;
+            uint32_t s = m_noiseState;
+            auto next = [&s]() {
+                s ^= s << 13;
+                s ^= s >> 17;
+                s ^= s << 5;
+                return static_cast<float>(s & 0xFFFF) * (2.0f / 65535.0f) - 1.0f;
+            };
+            if (m_noiseTable.size() != n + slack)
+            {
+                m_noiseTable.resize(n + slack);
+                const float k = static_cast<float>(m_noise) * 1.732f / 2.0f; // sigma of a sum of 4 U(-1,1) = 2/sqrt(3)
+                for (size_t i = 0; i + 2 < m_noiseTable.size(); i += 3)
+                {
+                    const float luma = (next() + next() + next() + next()) * k * 0.8f;
+                    for (int c = 0; c < 3; ++c)
+                    {
+                        float v = luma + (next() + next()) * k * 0.6f;
+                        v = v < -127.0f ? -127.0f : (v > 127.0f ? 127.0f : v);
+                        m_noiseTable[i + c] = static_cast<int8_t>(v < 0.0f ? v - 0.5f : v + 0.5f);
+                    }
+                }
+            }
+            next();
+            const size_t off = 3 * (static_cast<size_t>(s) % 65536);
+            const int8_t *nz = m_noiseTable.data() + off;
+            for (size_t i = 0; i < n; ++i)
+            {
+                const int v = static_cast<int>(m_buffer[i]) + nz[i];
+                m_buffer[i] = static_cast<uint8_t>(v < 0 ? 0 : (v > 255 ? 255 : v));
+            }
+            m_noiseState = s;
         }
         return;
     }

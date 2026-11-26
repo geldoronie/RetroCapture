@@ -1208,6 +1208,7 @@ bool APIController::handleGETImageSettings(int clientFd)
          << "\"contrast\": " << jsonNumber(m_uiManager->getContrast()) << ", "
          << "\"saturation\": " << jsonNumber(m_uiManager->getSaturation()) << ", "
          << "\"gamma\": " << jsonNumber(m_uiManager->getGamma()) << ", "
+         << "\"temporalDenoise\": " << jsonNumber(m_uiManager->getTemporalDenoise()) << ", "
          << "\"colorRange\": " << jsonString(colorRangeName(m_uiManager->getColorRange())) << ", "
          << "\"expandLimitedAfterDecode\": " << jsonBool(m_uiManager->getExpandLimitedAfterDecode()) << ", "
          << "\"downscaleFilter\": "
@@ -1361,6 +1362,7 @@ bool APIController::handleGETFrameGeneration(int clientFd)
         << "\"method\": " << jsonString(FrameGenSettings::methodName(g.method)) << ", "
         << "\"protectStatic\": " << jsonBool(g.protectStatic) << ", "
         << "\"skipRepeats\": " << jsonBool(g.skipRepeats) << ", "
+        << "\"rifeScale\": " << jsonString(FrameGenSettings::rifeScaleName(g.rifeScale)) << ", "
         << "\"outputs\": {"
         << "\"window\": " << jsonBool(g.window) << ", "
         << "\"stream\": " << jsonBool(g.stream) << ", "
@@ -1379,7 +1381,9 @@ bool APIController::handleGETFrameGeneration(int clientFd)
         << "\"inferMs\": " << jsonNumber(st.rifeInferMs) << ", "
         << "\"latencyMs\": " << jsonNumber(st.rifeLatencyMs) << ", "
         << "\"delivered\": " << st.rifeDelivered << ", "
-        << "\"late\": " << st.rifeLate << "}, "
+        << "\"late\": " << st.rifeLate << ", "
+        << "\"width\": " << st.rifeWidth << ", "
+        << "\"height\": " << st.rifeHeight << "}, "
         << "\"active\": " << jsonBool(st.active) << ", "
         << "\"remoteDriven\": " << jsonBool(st.remoteDriven) << ", "
         << "\"sourceFps\": " << jsonNumber(st.sourceFps) << ", "
@@ -1429,6 +1433,18 @@ bool APIController::handleSetFrameGeneration(int clientFd, const std::string &bo
                 return true;
             }
             g.method = m;
+        }
+        if (json.contains("rifeScale"))
+        {
+            const int s = json["rifeScale"].is_string()
+                              ? FrameGenSettings::rifeScaleFromName(json["rifeScale"].get<std::string>())
+                              : -1;
+            if (s < 0)
+            {
+                sendErrorResponse(clientFd, 400, "Invalid 'rifeScale' (use auto, full or fast)");
+                return true;
+            }
+            g.rifeScale = s;
         }
         auto readBool = [&](const nlohmann::json &obj, const char *key, bool &dst) -> bool {
             if (!obj.contains(key)) return true;
@@ -1808,6 +1824,27 @@ std::string APIController::buildMetaSnapshotJSON()
     std::string presetName = m_uiManager->getCurrentShader();
     std::string presetPath = shaderEngine ? shaderEngine->getPresetPath() : "";
     std::string presetHash = presetPath.empty() ? "" : computePresetHash(presetPath);
+    // The client resolves "preset" in its own shaders_glsl folder, so send
+    // the loaded preset's path relative to ours (a profile can carry an
+    // absolute host path, which means nothing on the client).
+    if (shaderActive && !presetPath.empty())
+    {
+        auto slashes = [](std::string s)
+        {
+            std::replace(s.begin(), s.end(), '\\', '/');
+            return s;
+        };
+        const std::string full = slashes(presetPath);
+        std::string base = slashes(m_application->getShaderBasePath().string());
+        if (!base.empty() && base.back() != '/')
+            base += '/';
+        const std::string marker = "shaders_glsl/";
+        const size_t at = full.rfind(marker);
+        if (!base.empty() && full.compare(0, base.size(), base) == 0)
+            presetName = full.substr(base.size());
+        else if (at != std::string::npos)
+            presetName = full.substr(at + marker.size());
+    }
 
     std::ostringstream json;
     json << "{"
@@ -1818,6 +1855,10 @@ std::string APIController::buildMetaSnapshotJSON()
          <<   "\"pipelineEnabled\": " << jsonBool(clientPipelineEnabled)                  << ", "
          <<   "\"preset\": "          << jsonString(presetName)                          << ", "
          <<   "\"presetHash\": "      << jsonString(presetHash)                          << ", "
+         // The size the chain renders at (the last pass's viewport): the
+         // client renders at the same size so the look matches.
+         <<   "\"viewportWidth\": "   << jsonNumber(shaderActive ? shaderEngine->getViewportWidth() : 0u)  << ", "
+         <<   "\"viewportHeight\": "  << jsonNumber(shaderActive ? shaderEngine->getViewportHeight() : 0u) << ", "
          <<   "\"parameters\": [";
 
     if (shaderActive)
@@ -2359,6 +2400,16 @@ bool APIController::handleSetImageSettings(int clientFd, const std::string &body
         if (json.contains("saturation"))
         {
             m_uiManager->setSaturation(std::max(0.0f, std::min(3.0f, json["saturation"].get<float>())));
+            updated = true;
+        }
+        if (json.contains("temporalDenoise"))
+        {
+            if (!json["temporalDenoise"].is_number())
+            {
+                sendErrorResponse(clientFd, 400, "'temporalDenoise' must be a number from 0 (off) to 1");
+                return true;
+            }
+            m_uiManager->setTemporalDenoise(json["temporalDenoise"].get<float>()); // clamped to 0..1
             updated = true;
         }
 

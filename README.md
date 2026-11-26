@@ -5,7 +5,7 @@
 > capture cards. Includes HTTP MPEG-TS streaming, local recording, a virtual
 > camera output, and a full web portal for remote control.
 
-![Version](https://img.shields.io/badge/version-0.10.0--alpha-orange)
+![Version](https://img.shields.io/badge/version-0.10.1--alpha-orange)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20Raspberry%20Pi-lightgrey)
 ![Status](https://img.shields.io/badge/status-alpha-yellow)
@@ -16,7 +16,7 @@
      Target ~1600x900. Save as docs/screenshots/hero.png -->
 ![Hero](docs/screenshots/hero.png)
 
-**[⬇ Download 0.10.0-alpha](https://github.com/geldoronie/RetroCapture/releases/latest)** ·
+**[⬇ Download 0.10.1-alpha](https://github.com/geldoronie/RetroCapture/releases/latest)** ·
 [Documentation](#documentation) ·
 [Issues](https://github.com/geldoronie/RetroCapture/issues) ·
 [Changelog](CHANGELOG.md)
@@ -59,6 +59,25 @@ RetroCapture turns a generic capture card into a "retro-aware" capture rig:
   contrast, saturation, hue, gain, exposure, gamma, white balance, …).
 - 🥧 **Cross-platform**: Linux x86_64, Windows x86_64, Raspberry Pi 4/5
   (ARM64), Raspberry Pi 2/3/Zero (ARM32v7).
+
+### What's new in 0.10.1-alpha
+
+A follow-up to the image pipeline.
+
+- **Faster RIFE at 1080p (#260).** The network runs on a 720p-sized copy and
+  the detail is restored at full size: twice as fast, same quality.
+- **RIFE on macOS (#255).** The Apple Silicon and Intel bundles include it.
+- **Temporal denoise (#268).** Cleans up noise from analog sources through a
+  SCART/composite converter. Off by default.
+- **`/raw` carries frame generation and the upscale (#265, #264)**, never the
+  shader, which the remote client applies itself.
+- **Virtual camera in client mode (#270).** Relay the stream you receive.
+- **Client mode shows the host's picture.** Your own Image settings (crop,
+  color, upscaler...) no longer touch the stream, and the client follows
+  every shader change on the host, including None. The shader renders at
+  the host's size, so it looks the same in a smaller client window.
+- **Fixes:** shader Rescan no longer empties the list (#273), and the Info
+  panel shows the real version (#271).
 
 ### What's new in 0.10.0-alpha
 
@@ -251,17 +270,17 @@ shader:
 
 ## Download
 
-Pre-built binaries for **0.10.0-alpha** are attached to the
+Pre-built binaries for **0.10.1-alpha** are attached to the
 [latest GitHub release](https://github.com/geldoronie/RetroCapture/releases/latest):
 
 | Platform | Artifact |
 | --- | --- |
-| Linux x86_64 | `RetroCapture-0.10.0-alpha-linux-x86_64.AppImage` |
-| Linux ARM64 (Raspberry Pi 4 / 5) | `RetroCapture-0.10.0-alpha-linux-arm64v8.tar.gz` |
-| Linux ARM32v7 (Raspberry Pi 2 / 3 / Zero 2) | `RetroCapture-0.10.0-alpha-linux-arm32v7.tar.gz` |
-| Windows x86_64 | `RetroCapture-0.10.0-alpha-windows-x86_64-Setup.exe` |
-| macOS Apple Silicon (arm64) | `RetroCapture-0.10.0-alpha-macos-arm64.tar.gz` |
-| macOS Intel (x86_64) | `RetroCapture-0.10.0-alpha-macos-x86_64.tar.gz` |
+| Linux x86_64 | `RetroCapture-0.10.1-alpha-linux-x86_64.AppImage` |
+| Linux ARM64 (Raspberry Pi 4 / 5) | `RetroCapture-0.10.1-alpha-linux-arm64v8.tar.gz` |
+| Linux ARM32v7 (Raspberry Pi 2 / 3 / Zero 2) | `RetroCapture-0.10.1-alpha-linux-arm32v7.tar.gz` |
+| Windows x86_64 | `RetroCapture-0.10.1-alpha-windows-x86_64-Setup.exe` |
+| macOS Apple Silicon (arm64) | `RetroCapture-0.10.1-alpha-macos-arm64.tar.gz` |
+| macOS Intel (x86_64) | `RetroCapture-0.10.1-alpha-macos-x86_64.tar.gz` |
 
 A `SHA256SUMS` file is published alongside the binaries.
 
@@ -315,21 +334,21 @@ For the full per-version history see [`CHANGELOG.md`](CHANGELOG.md).
 
 ```bash
 # Download from Releases, then:
-chmod +x RetroCapture-0.10.0-alpha-linux-x86_64.AppImage
-./RetroCapture-0.10.0-alpha-linux-x86_64.AppImage --source v4l2 --v4l2-device /dev/video0
+chmod +x RetroCapture-0.10.1-alpha-linux-x86_64.AppImage
+./RetroCapture-0.10.1-alpha-linux-x86_64.AppImage --source v4l2 --v4l2-device /dev/video0
 ```
 
 ### Windows
 
-Run the installer (`RetroCapture-0.10.0-alpha-windows-x86_64-Setup.exe`),
+Run the installer (`RetroCapture-0.10.1-alpha-windows-x86_64-Setup.exe`),
 then launch RetroCapture from the Start menu. DirectShow is the default
 capture source on Windows.
 
 ### Raspberry Pi
 
 ```bash
-tar -xzf RetroCapture-0.10.0-alpha-linux-arm64v8.tar.gz
-cd RetroCapture-0.10.0-alpha-linux-arm64v8
+tar -xzf RetroCapture-0.10.1-alpha-linux-arm64v8.tar.gz
+cd RetroCapture-0.10.1-alpha-linux-arm64v8
 ./retrocapture --source v4l2 --v4l2-device /dev/video0
 ```
 

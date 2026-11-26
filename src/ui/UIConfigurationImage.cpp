@@ -31,6 +31,16 @@ void UIConfigurationImage::render()
                       "affect what you see locally — they're not "
                       "embedded in the stream or recording.");
 
+    // Client mode: none of these apply to the host's stream (see
+    // FrameCapturePipeline::localImagePipeline()).
+    if (m_uiManager->isRemoteSource())
+    {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.8f, 0.3f, 1.0f));
+        ImGui::TextWrapped("%s", T("image.client_mode_note").c_str());
+        ImGui::PopStyleColor();
+        ImGui::Spacing();
+    }
+
     renderBrightnessContrast();
     renderSourceColor();
     renderFrameGeneration();
@@ -157,6 +167,25 @@ void UIConfigurationImage::renderSourceColor()
         m_uiManager->saveConfig();
     }
 
+    // #268 — temporal denoise (analog noise, chroma speckle, shimmer).
+    float denoise = m_uiManager->getTemporalDenoise();
+    if (ImGui::SliderFloat("Temporal denoise", &denoise, 0.0f, 1.0f, denoise <= 0.0f ? "Off" : "%.2f"))
+    {
+        m_uiManager->setTemporalDenoise(denoise);
+        m_uiManager->saveConfig();
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Averages still areas over several frames and leaves moving ones alone:\n"
+                          "cleans the noise and shimmer of analog consoles through a converter.\n"
+                          "No added latency. Higher = stronger; too high can smear slow motion.\n"
+                          "Runs before the shader chain and frame generation; /raw gets it too.");
+    ImGui::SameLine();
+    if (ImGui::Button("Off##denoise"))
+    {
+        m_uiManager->setTemporalDenoise(0.0f);
+        m_uiManager->saveConfig();
+    }
+
     if (ImGui::Button("Reset color to defaults"))
     {
         m_uiManager->setBrightness(1.0f);
@@ -177,7 +206,8 @@ void UIConfigurationImage::renderUpscaler()
                       "Built-in spatial upscaler. It runs in the pipeline "
                       "before or after your shader preset, so both work "
                       "together. Applies to the window, stream, recording "
-                      "and virtual camera; /raw stays the untouched source.");
+                      "and virtual camera; /raw gets the upscale (never the "
+                      "shader) unless 'Upscale /raw' is off.");
 
     UpscalerSettings up = m_uiManager->getUpscalerSettings();
     bool changed = false;
@@ -267,6 +297,20 @@ void UIConfigurationImage::renderUpscaler()
                           "the scanline density right (one scanline per source line).\n"
                           "The chain then renders at the largest whole multiple of the source\n"
                           "that fits the target, and the upscaler scales that to the target.");
+
+    // #264 — /raw is the picture a remote RetroCapture applies its own shader
+    // to; it can also apply its own upscaler.
+    bool rawUp = up.raw;
+    if (ImGui::Checkbox("Upscale /raw (remote clients)##upscaler", &rawUp))
+    {
+        up.raw = rawUp;
+        changed = true;
+    }
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("Off: /raw sends the native picture and the remote client applies its\n"
+                          "own upscaler: less bandwidth and less decode work on the client.\n"
+                          "/raw never carries your shader. With the upscaler after the shader\n"
+                          "chain, /raw is always the native picture.");
 
     if (!on) ImGui::EndDisabled();
 
@@ -547,8 +591,8 @@ static void renderRifeStatus(const UIManager::FrameGenStatus &st)
         ImGui::TextDisabled("RIFE: starting Vulkan / loading the model... (Motion meanwhile)");
     else if (st.rifeState == 2)
     {
-        ImGui::TextDisabled("RIFE on %s: %.1f ms/frame, %llu frames, %llu late (shown with Motion)",
-                            st.rifeDevice.c_str(), st.rifeInferMs,
+        ImGui::TextDisabled("RIFE on %s at %ux%u: %.1f ms/frame, %llu frames, %llu late (shown with Motion)",
+                            st.rifeDevice.c_str(), st.rifeWidth, st.rifeHeight, st.rifeInferMs,
                             static_cast<unsigned long long>(st.rifeDelivered),
                             static_cast<unsigned long long>(st.rifeLate));
     }
@@ -596,6 +640,23 @@ void UIConfigurationImage::renderFrameGeneration()
     {
         fg.method = method;
         changed = true;
+    }
+    if (fg.method == FrameGenSettings::RIFE)
+    {
+        // #260 — the network's size: its cost grows with the pixel count.
+        static const char *scales[] = {"Auto (reduce above 720p)", "Full (native size)",
+                                       "Fast (always ~720p)"};
+        int scale = fg.rifeScale;
+        if (ImGui::Combo("RIFE resolution##framegen", &scale, scales, IM_ARRAYSIZE(scales)))
+        {
+            fg.rifeScale = scale;
+            changed = true;
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Above 720p the network runs on a ~1280x720 copy and its frame is scaled\n"
+                              "back up on the GPU: 1080p60 keeps up instead of stuttering. Real frames\n"
+                              "stay native; generated ones are a little softer. Full keeps the native\n"
+                              "size (needs a fast GPU above 720p).");
     }
     ImGui::PopItemWidth();
     if (ImGui::Checkbox("Keep static regions still (HUD, borders)##framegen", &fg.protectStatic))

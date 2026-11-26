@@ -306,7 +306,7 @@ void QuickActionsOverlay::render()
     // click. Mirrors the Streaming + Recording button shape so
     // it slots into the overlay's existing rhythm.
 #if defined(__linux__)
-    if (!clientMode)
+    // Client mode too: the virtual camera then relays the received stream.
     {
         // Cheap O(N) over a handful of /dev/video* nodes; runs
         // only when QuickActions is open, every frame. Could be

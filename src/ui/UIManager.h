@@ -244,6 +244,8 @@ public:
     // colorRange: 0 = Auto, 1 = Limited (16-235), 2 = Full (0-255).
     void setSaturation(float saturation) { m_saturation = saturation; }
     void setGamma(float gamma) { m_gamma = gamma; }
+    // #268 — temporal denoise strength, 0 = off .. 1.
+    void setTemporalDenoise(float s) { m_temporalDenoise = s < 0.0f ? 0.0f : (s > 1.0f ? 1.0f : s); }
     void setColorRange(int colorRange) { m_colorRange = (colorRange >= 0 && colorRange <= 2) ? colorRange : 0; }
     // #243 — extra 16-235 -> 0-255 expansion after the decode (off = identity).
     void setExpandLimitedAfterDecode(bool enabled) { m_expandLimitedAfterDecode = enabled; }
@@ -390,6 +392,8 @@ public:
         float rifeLatencyMs = 0.0f;  // real frame in -> first result out
         uint64_t rifeDelivered = 0;  // frames RIFE delivered in time
         uint64_t rifeLate = 0;       // frames that fell back to Motion
+        uint32_t rifeWidth = 0;      // #260 — size the network runs at
+        uint32_t rifeHeight = 0;
     };
     FrameGenStatus getFrameGenStatus() const
     {
@@ -869,6 +873,7 @@ public:
     float getContrast() const { return m_contrast; }
     float getSaturation() const { return m_saturation; }
     float getGamma() const { return m_gamma; }
+    float getTemporalDenoise() const { return m_temporalDenoise; }
     int getColorRange() const { return m_colorRange; }
     bool getExpandLimitedAfterDecode() const { return m_expandLimitedAfterDecode; }
     int getSourceDownscaleFilter() const { return m_sourceDownscaleFilter; }
@@ -1452,6 +1457,7 @@ private:
     // #228 — source colour controls (identity defaults)
     float m_saturation = 1.0f;
     float m_gamma = 1.0f;
+    float m_temporalDenoise = 0.0f; // #268
     int m_colorRange = 0;
     bool m_expandLimitedAfterDecode = false; // #243
     int m_sourceDownscaleFilter = 0;          // Auto
@@ -1566,6 +1572,8 @@ public:
 
     // Scanning methods (tornados públicos para uso pelas classes de abas)
     void scanShaders(const std::string &basePath);
+    /** Scan again where the startup scan looked (the assets' shader dir). */
+    void rescanShaders() { scanShaders(m_shaderBasePath); }
 
 private:
     void scanV4L2Devices();
